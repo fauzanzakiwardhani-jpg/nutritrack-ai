@@ -60,6 +60,88 @@ CUSTOM_CSS = """
         color: #0f172a !important;
     }
 
+    /* ---------- HAMBURGER TOGGLE (replaces default chevron icon) ---------- */
+    button[data-testid="stSidebarCollapseButton"] svg,
+    button[data-testid="stSidebarCollapsedControl"] svg,
+    [data-testid="collapsedControl"] svg {
+        display: none !important;
+    }
+    button[data-testid="stSidebarCollapseButton"],
+    button[data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"] {
+        position: relative;
+        border-radius: 10px !important;
+        transition: background 0.15s ease;
+    }
+    button[data-testid="stSidebarCollapseButton"]::before,
+    button[data-testid="stSidebarCollapsedControl"]::before,
+    [data-testid="collapsedControl"]::before {
+        content: "☰";
+        font-size: 1.35rem;
+        line-height: 1;
+        color: #0f172a;
+        font-weight: 700;
+    }
+    button[data-testid="stSidebarCollapseButton"]:hover,
+    button[data-testid="stSidebarCollapsedControl"]:hover,
+    [data-testid="collapsedControl"]:hover {
+        background: #ecfdf5 !important;
+    }
+
+    /* ---------- SIDEBAR NAV MENU ---------- */
+    .nav-heading {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 1rem;
+    }
+    .nav-heading .icon {
+        font-size: 1.2rem;
+    }
+    .nav-heading .text {
+        font-weight: 800;
+        font-size: 1.05rem;
+        color: #0f172a;
+        letter-spacing: -0.01em;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] > div[role="radiogroup"] {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label {
+        background: #f8fafc;
+        border: 1px solid #eef2f1;
+        border-radius: 12px;
+        padding: 11px 14px;
+        margin: 0 !important;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 0.95rem;
+        color: #334155;
+        transition: all 0.15s ease;
+        width: 100%;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:hover {
+        background: #ecfdf5;
+        border-color: #a7f3d0;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label > div:first-child {
+        display: none;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label div[data-testid="stMarkdownContainer"] p {
+        font-size: 0.95rem;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) {
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        border-color: #059669;
+        box-shadow: 0 4px 10px -2px rgba(16, 185, 129, 0.4);
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) p,
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) div {
+        color: #ffffff !important;
+    }
+
     /* ---------- HERO HEADER ---------- */
     .app-header {
         position: relative;
@@ -368,6 +450,7 @@ def calculate_target(weight_kg, height_cm, age, gender, activity_level, goal):
 # ----------------------------------------------------
 st.markdown("""
 <div class="app-header">
+    <span class="eyebrow">🥗 Didukung Gemini AI Vision</span>
     <h1>NutriTrack AI</h1>
     <p>Asisten AI Pengenal Gizi, Pengukur Kalori & Analisis Nutrisi Harian — cukup foto makananmu, sisanya biar AI yang hitung.</p>
 </div>
@@ -378,12 +461,22 @@ st.markdown("""
 # 7. SIDEBAR NAVIGATION & PROFILE MANAGEMENT
 # ----------------------------------------------------
 with st.sidebar:
-    st.markdown("Menu")
-    menu_selection = st.radio(
+    st.markdown("""
+    <div class="nav-heading">
+        <span class="icon">☰</span>
+        <span class="text">Menu Navigasi</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    menu_options = ["📋 Log & Rekomendasi", "📷 Input Makanan", "📊 Analytics & Trend"]
+    menu_raw = st.radio(
         "Pilih Halaman:",
-        ["Log & Rekomendasi", "Input Makanan", "Analytics & Trend"],
-        index=0
+        menu_options,
+        index=0,
+        label_visibility="collapsed"
     )
+    # Normalisasi kembali ke label asli (tanpa ikon) agar logic routing tetap sama
+    menu_selection = menu_raw.split(" ", 1)[1]
 
     st.divider()
     st.markdown("### 👤 Profil")
@@ -747,47 +840,87 @@ elif menu_selection == "Analytics & Trend":
     if not df.empty:
         df['log_date'] = pd.to_datetime(df['log_date'])
 
-        base = alt.Chart(df).encode(
-            x=alt.X('log_date:T', title='Tanggal', axis=alt.Axis(format='%d %b')),
-            y=alt.Y('total_calories:Q', title='Kalori (kcal)'),
-            tooltip=['log_date:T', 'total_calories:Q']
+        # Label hari dalam Bahasa Indonesia (mis. "Sen 08 Sep")
+        hari_map = {0: 'Sen', 1: 'Sel', 2: 'Rab', 3: 'Kam', 4: 'Jum', 5: 'Sab', 6: 'Min'}
+        df['hari'] = df['log_date'].dt.dayofweek.map(hari_map)
+        df['day_label'] = df['hari'] + ' ' + df['log_date'].dt.strftime('%d %b')
+        df['status'] = df['total_calories'].apply(lambda c: 'Sesuai Target' if c <= target_val else 'Melebihi Target')
+        # Rata-rata bergerak 3 hari untuk menunjukkan arah tren
+        df['rolling_avg'] = df['total_calories'].rolling(window=3, min_periods=1).mean()
+
+        bar_width = 42
+
+        bars = alt.Chart(df).mark_bar(
+            cornerRadiusTopLeft=10,
+            cornerRadiusTopRight=10,
+            size=bar_width
+        ).encode(
+            x=alt.X('day_label:N', title=None, sort=list(df['day_label']),
+                    axis=alt.Axis(labelAngle=0, labelColor='#64748b', labelFontWeight=600)),
+            y=alt.Y('total_calories:Q', title='Kalori (kcal)',
+                    axis=alt.Axis(gridColor='#eef2f1', labelColor='#94a3b8')),
+            color=alt.Color('status:N',
+                             scale=alt.Scale(domain=['Sesuai Target', 'Melebihi Target'],
+                                              range=['#34d399', '#f87171']),
+                             legend=None),
+            tooltip=[
+                alt.Tooltip('day_label:N', title='Tanggal'),
+                alt.Tooltip('total_calories:Q', title='Kalori', format='.0f'),
+                alt.Tooltip('status:N', title='Status')
+            ]
         )
 
-        area = base.mark_area(
-            line={'color': '#10b981', 'strokeWidth': 3},
-            point=alt.OverlayMarkDef(color='#059669', size=60),
-            color=alt.Gradient(
-                gradient='linear',
-                stops=[
-                    alt.GradientStop(color='#d1fae5', offset=0),
-                    alt.GradientStop(color='#ffffff', offset=1)
-                ],
-                x1=1, x2=1, y1=1, y2=0
-            )
+        value_labels = alt.Chart(df).mark_text(
+            dy=-10, fontWeight=700, fontSize=12, color='#0f172a'
+        ).encode(
+            x=alt.X('day_label:N', sort=list(df['day_label'])),
+            y=alt.Y('total_calories:Q'),
+            text=alt.Text('total_calories:Q', format='.0f')
+        )
+
+        trend_line = alt.Chart(df).mark_line(
+            color='#059669', strokeWidth=2.5, strokeDash=[1, 0], point=alt.OverlayMarkDef(color='#059669', size=45, filled=True)
+        ).encode(
+            x=alt.X('day_label:N', sort=list(df['day_label'])),
+            y=alt.Y('rolling_avg:Q'),
+            tooltip=[alt.Tooltip('rolling_avg:Q', title='Rata-rata 3 Hari', format='.0f')]
         )
 
         target_df = pd.DataFrame({'Target': [target_val]})
-        rule = alt.Chart(target_df).mark_rule(color='#ef4444', strokeDash=[5, 5], strokeWidth=2).encode(
-            y='Target:Q'
+        rule = alt.Chart(target_df).mark_rule(
+            color='#ef4444', strokeDash=[6, 4], strokeWidth=2
+        ).encode(y='Target:Q')
+
+        target_label = alt.Chart(target_df).mark_text(
+            align='left', dx=6, dy=-8, color='#ef4444', fontWeight=700, fontSize=11
+        ).encode(
+            y='Target:Q',
+            x=alt.value(0),
+            text=alt.value(f'Target {target_val:.0f} kcal')
         )
 
-        chart = (area + rule).properties(
+        chart = (bars + value_labels + trend_line + rule + target_label).properties(
             height=380
         ).configure_view(
             strokeWidth=0
         ).configure_axis(
-            grid=True,
-            gridColor='#eef2f1',
             domain=False
         )
 
         st.markdown('<div class="metric-card" style="padding: 1.5rem;">', unsafe_allow_html=True)
         st.altair_chart(chart, use_container_width=True)
+        st.markdown("""
+        <div style="display:flex; gap:1.5rem; margin-top:0.6rem; font-size:0.85rem; color:#64748b; flex-wrap:wrap;">
+            <span>🟢 <b style="color:#0f172a;">Hijau</b> — sesuai target</span>
+            <span>🔴 <b style="color:#0f172a;">Merah</b> — melebihi target</span>
+            <span>📈 <b style="color:#0f172a;">Garis Hijau Tua</b> — rata-rata bergerak 3 hari</span>
+            <span>┄ <b style="color:#0f172a;">Garis Putus-putus Merah</b> — target harian</span>
+        </div>
+        """, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
-        st.caption("🔴 **Garis Merah Putus-putus:** Target Kalori Harian")
 
         st.markdown("<br>", unsafe_allow_html=True)
-        col_s1, col_s2 = st.columns(2)
+        col_s1, col_s2, col_s3 = st.columns(3)
         with col_s1:
             st.markdown(f"""
             <div class="metric-card">
@@ -802,6 +935,15 @@ elif menu_selection == "Analytics & Trend":
                 <div class="metric-icon icon-target">📈</div>
                 <div class="metric-label">Konsumsi Puncak</div>
                 <div class="metric-value">{df['total_calories'].max():.0f} <span class="metric-sub">kcal</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_s3:
+            hari_sesuai = int((df['total_calories'] <= target_val).sum())
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-icon icon-cal">✅</div>
+                <div class="metric-label">Hari Sesuai Target</div>
+                <div class="metric-value">{hari_sesuai} <span class="metric-sub">/ {len(df)} hari</span></div>
             </div>
             """, unsafe_allow_html=True)
     else:
