@@ -450,6 +450,7 @@ def calculate_target(weight_kg, height_cm, age, gender, activity_level, goal):
 # ----------------------------------------------------
 st.markdown("""
 <div class="app-header">
+    <span class="eyebrow">🥗 Didukung Gemini AI Vision</span>
     <h1>NutriTrack AI</h1>
     <p>Asisten AI Pengenal Gizi, Pengukur Kalori & Analisis Nutrisi Harian — cukup foto makananmu, sisanya biar AI yang hitung.</p>
 </div>
@@ -466,7 +467,7 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    menu_options = ["Log & Rekomendasi", "Input Makanan", "Analytics & Trend"]
+    menu_options = ["📋 Log & Rekomendasi", "📷 Input Makanan", "📊 Analytics & Trend"]
     menu_raw = st.radio(
         "Pilih Halaman:",
         menu_options,
