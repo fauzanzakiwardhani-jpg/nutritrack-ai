@@ -466,15 +466,15 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    menu_options = ["📋 Log & Rekomendasi", "📷 Input Makanan", "📊 Analytics & Trend"]
+    menu_options = ["Log & Rekomendasi", "Input Makanan", "Analytics & Trend"]
     menu_raw = st.radio(
         "Pilih Halaman:",
         menu_options,
         index=0,
         label_visibility="collapsed"
     )
-    # Normalisasi kembali ke label asli (tanpa ikon) agar logic routing tetap sama
-    menu_selection = menu_raw.split(" ", 1)[1]
+    # Tidak bergantung pada emoji/ikon di depan teks — aman dipakai/dihapus kapan saja
+    menu_selection = menu_raw
 
     st.divider()
     st.markdown("### 👤 Profil")
@@ -549,7 +549,7 @@ with st.sidebar:
 # ====================================================
 # PAGE 1: HALAMAN UTAMA (LOG HARIAN & REKOMENDASI)
 # ====================================================
-if menu_selection == "Log & Rekomendasi":
+if "Log & Rekomendasi" in menu_selection:
     today_str = datetime.now().strftime('%Y-%m-%d')
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
@@ -716,7 +716,7 @@ if menu_selection == "Log & Rekomendasi":
 # ====================================================
 # PAGE 2: INPUT MAKANAN
 # ====================================================
-elif menu_selection == "Input Makanan":
+elif "Input Makanan" in menu_selection:
     st.markdown('<div class="section-label">Logging</div>', unsafe_allow_html=True)
     st.markdown("### Catat Makanan Kamu")
     input_type = st.radio("Pilih Metode Logging:", ["Scan Foto Makanan (AI Vision)", "Input Manual"], horizontal=True)
@@ -815,7 +815,7 @@ elif menu_selection == "Input Makanan":
 # ====================================================
 # PAGE 3: ANALYTICS & TREND
 # ====================================================
-elif menu_selection == "Analytics & Trend":
+elif "Analytics & Trend" in menu_selection:
     st.markdown('<div class="section-label">Analitik</div>', unsafe_allow_html=True)
     st.markdown("### Trend Asupan Kalori (7 Hari Terakhir)")
 
