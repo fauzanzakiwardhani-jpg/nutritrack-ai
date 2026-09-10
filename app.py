@@ -60,6 +60,88 @@ CUSTOM_CSS = """
         color: #0f172a !important;
     }
 
+    /* ---------- HAMBURGER TOGGLE (replaces default chevron icon) ---------- */
+    button[data-testid="stSidebarCollapseButton"] svg,
+    button[data-testid="stSidebarCollapsedControl"] svg,
+    [data-testid="collapsedControl"] svg {
+        display: none !important;
+    }
+    button[data-testid="stSidebarCollapseButton"],
+    button[data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"] {
+        position: relative;
+        border-radius: 10px !important;
+        transition: background 0.15s ease;
+    }
+    button[data-testid="stSidebarCollapseButton"]::before,
+    button[data-testid="stSidebarCollapsedControl"]::before,
+    [data-testid="collapsedControl"]::before {
+        content: "☰";
+        font-size: 1.35rem;
+        line-height: 1;
+        color: #0f172a;
+        font-weight: 700;
+    }
+    button[data-testid="stSidebarCollapseButton"]:hover,
+    button[data-testid="stSidebarCollapsedControl"]:hover,
+    [data-testid="collapsedControl"]:hover {
+        background: #ecfdf5 !important;
+    }
+
+    /* ---------- SIDEBAR NAV MENU ---------- */
+    .nav-heading {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 1rem;
+    }
+    .nav-heading .icon {
+        font-size: 1.2rem;
+    }
+    .nav-heading .text {
+        font-weight: 800;
+        font-size: 1.05rem;
+        color: #0f172a;
+        letter-spacing: -0.01em;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] > div[role="radiogroup"] {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label {
+        background: #f8fafc;
+        border: 1px solid #eef2f1;
+        border-radius: 12px;
+        padding: 11px 14px;
+        margin: 0 !important;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 0.95rem;
+        color: #334155;
+        transition: all 0.15s ease;
+        width: 100%;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:hover {
+        background: #ecfdf5;
+        border-color: #a7f3d0;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label > div:first-child {
+        display: none;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label div[data-testid="stMarkdownContainer"] p {
+        font-size: 0.95rem;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) {
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        border-color: #059669;
+        box-shadow: 0 4px 10px -2px rgba(16, 185, 129, 0.4);
+    }
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) p,
+    div[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) div {
+        color: #ffffff !important;
+    }
+
     /* ---------- HERO HEADER ---------- */
     .app-header {
         position: relative;
@@ -379,12 +461,22 @@ st.markdown("""
 # 7. SIDEBAR NAVIGATION & PROFILE MANAGEMENT
 # ----------------------------------------------------
 with st.sidebar:
-    st.markdown("Menu")
-    menu_selection = st.radio(
+    st.markdown("""
+    <div class="nav-heading">
+        <span class="icon">☰</span>
+        <span class="text">Menu Navigasi</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    menu_options = ["📋 Log & Rekomendasi", "📷 Input Makanan", "📊 Analytics & Trend"]
+    menu_raw = st.radio(
         "Pilih Halaman:",
-        ["Log & Rekomendasi", "Input Makanan", "Analytics & Trend"],
-        index=0
+        menu_options,
+        index=0,
+        label_visibility="collapsed"
     )
+    # Normalisasi kembali ke label asli (tanpa ikon) agar logic routing tetap sama
+    menu_selection = menu_raw.split(" ", 1)[1]
 
     st.divider()
     st.markdown("### 👤 Profil")
