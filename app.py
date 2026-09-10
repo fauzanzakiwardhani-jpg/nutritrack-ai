@@ -35,7 +35,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 # ----------------------------------------------------
-# 2. CUSTOM CSS INJECTION (FIXED HAMBURGER & LAYOUT)
+# 2. CUSTOM CSS INJECTION (REDESIGNED)
 # ----------------------------------------------------
 CUSTOM_CSS = """
 <style>
@@ -43,78 +43,206 @@ CUSTOM_CSS = """
 
     html, body, [class*="css"] {
         font-family: 'Plus Jakarta Sans', sans-serif;
-        background-color: #f8fafc;
+        background-color: #f4f7f6;
         color: #0f172a;
     }
 
-    /* Sembunyikan Footer & Menu Tiga Titik Kanan Atas */
     footer { visibility: hidden; }
     #MainMenu { visibility: hidden; }
-    
-    /* Atur Header dan Tombol Sidebar (Hamburger ☰) */
+
     header[data-testid="stHeader"] {
         background-color: transparent !important;
         z-index: 99999 !important;
     }
-    
-    /* Ubah atau pastikan tombol toggle sidebar menampilkan ikon hamburger */
-    button[data-testid="stSidebarCollapseButton"], 
+
+    button[data-testid="stSidebarCollapseButton"],
     button[data-testid="baseButton-header"] {
         color: #0f172a !important;
     }
 
+    /* ---------- HERO HEADER ---------- */
     .app-header {
-        background: linear-gradient(135deg, #059669 0%, #10b981 50%, #34d399 100%);
-        padding: 2rem 2.5rem;
-        border-radius: 20px;
+        position: relative;
+        overflow: hidden;
+        background: radial-gradient(120% 160% at 0% 0%, #0d9488 0%, #059669 45%, #10b981 100%);
+        padding: 2.4rem 2.6rem;
+        border-radius: 22px;
         color: white;
-        margin-bottom: 2rem;
-        box-shadow: 0 10px 25px -5px rgba(16, 185, 129, 0.25);
+        margin-bottom: 2.2rem;
+        box-shadow: 0 20px 40px -12px rgba(5, 150, 105, 0.35);
+    }
+    .app-header::after {
+        content: "";
+        position: absolute;
+        top: -60px;
+        right: -60px;
+        width: 220px;
+        height: 220px;
+        background: rgba(255,255,255,0.10);
+        border-radius: 50%;
+    }
+    .app-header::before {
+        content: "";
+        position: absolute;
+        bottom: -80px;
+        right: 120px;
+        width: 160px;
+        height: 160px;
+        background: rgba(255,255,255,0.07);
+        border-radius: 50%;
+    }
+    .app-header .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(255,255,255,0.18);
+        padding: 4px 12px;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        margin-bottom: 0.9rem;
     }
     .app-header h1 {
         color: white !important;
         font-weight: 800;
-        font-size: 2.2rem;
+        font-size: 2.3rem;
         margin: 0;
+        letter-spacing: -0.02em;
+        position: relative;
+        z-index: 2;
     }
     .app-header p {
-        color: #e6fffa;
+        color: rgba(255,255,255,0.9);
         font-size: 1rem;
         margin-top: 0.5rem;
         margin-bottom: 0;
+        position: relative;
+        z-index: 2;
+        max-width: 520px;
     }
 
+    /* ---------- SECTION LABELS ---------- */
+    .section-label {
+        font-size: 0.8rem;
+        font-weight: 700;
+        color: #059669;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 0.3rem;
+    }
+
+    /* ---------- METRIC CARDS ---------- */
     .metric-card {
+        position: relative;
         background: white;
-        padding: 1.5rem;
-        border-radius: 16px;
-        border: 1px solid #e2e8f0;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        padding: 1.4rem 1.5rem;
+        border-radius: 18px;
+        border: 1px solid #eef2f1;
+        box-shadow: 0 2px 10px -4px rgba(15, 23, 42, 0.06);
+        transition: transform 0.18s ease, box-shadow 0.18s ease;
+        overflow: hidden;
     }
     .metric-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08);
+        transform: translateY(-3px);
+        box-shadow: 0 14px 24px -10px rgba(15, 23, 42, 0.12);
+    }
+    .metric-icon {
+        width: 38px;
+        height: 38px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.15rem;
+        margin-bottom: 0.7rem;
     }
     .metric-label {
-        font-size: 0.875rem;
+        font-size: 0.8rem;
         font-weight: 600;
         color: #64748b;
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }
     .metric-value {
-        font-size: 1.875rem;
+        font-size: 1.9rem;
         font-weight: 800;
         color: #0f172a;
-        margin-top: 0.25rem;
+        margin-top: 0.2rem;
+        letter-spacing: -0.02em;
+    }
+    .metric-sub {
+        font-size: 0.95rem;
+        color: #94a3b8;
+        font-weight: 600;
     }
 
-    .bg-protein { border-left: 5px solid #3b82f6; }
-    .bg-carbs { border-left: 5px solid #f59e0b; }
-    .bg-fat { border-left: 5px solid #ef4444; }
-    .bg-cal { border-left: 5px solid #10b981; }
+    /* Icon color themes */
+    .icon-cal    { background: #d1fae5; color: #059669; }
+    .icon-left   { background: #dbeafe; color: #2563eb; }
+    .icon-target { background: #fef3c7; color: #d97706; }
+    .icon-protein{ background: #dbeafe; color: #2563eb; }
+    .icon-carbs  { background: #fef3c7; color: #d97706; }
+    .icon-fat    { background: #fee2e2; color: #dc2626; }
 
+    /* Hero KPI card (Asupan Kalori) gets a subtle tint */
+    .metric-hero {
+        background: linear-gradient(160deg, #ecfdf5 0%, #ffffff 55%);
+        border: 1px solid #d1fae5;
+    }
+
+    /* ---------- CUSTOM PROGRESS BAR ---------- */
+    .progress-wrap {
+        background: #e6ece9;
+        border-radius: 999px;
+        height: 14px;
+        width: 100%;
+        overflow: hidden;
+        margin: 0.6rem 0 1.6rem 0;
+        box-shadow: inset 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .progress-fill {
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #10b981, #34d399);
+        transition: width 0.4s ease;
+    }
+    .progress-fill.over {
+        background: linear-gradient(90deg, #ef4444, #f87171);
+    }
+
+    /* Hide default Streamlit progress bar color mismatch */
+    div[data-testid="stProgress"] { display: none; }
+
+    /* ---------- AI ADVICE BANNER ---------- */
+    .advice-banner {
+        border-radius: 16px;
+        padding: 1rem 1.3rem;
+        font-weight: 500;
+        font-size: 0.95rem;
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        border: 1px solid transparent;
+    }
+    .advice-warning { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+    .advice-success { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
+    .advice-info    { background: #eff6ff; color: #1e3a8a; border-color: #bfdbfe; }
+
+    /* ---------- EMPTY STATE ---------- */
+    .empty-state {
+        text-align: center;
+        padding: 2.6rem 1.5rem;
+        background: white;
+        border: 1.5px dashed #cbd5e1;
+        border-radius: 18px;
+        color: #64748b;
+    }
+    .empty-state .emoji { font-size: 2.2rem; margin-bottom: 0.6rem; }
+    .empty-state b { color: #059669; }
+
+    /* ---------- BUTTONS ---------- */
     .stButton>button {
         border-radius: 12px;
         font-weight: 600;
@@ -123,11 +251,27 @@ CUSTOM_CSS = """
     .stButton>button[kind="primary"] {
         background: linear-gradient(135deg, #10b981 0%, #059669 100%);
         border: none;
+        box-shadow: 0 6px 14px -4px rgba(16, 185, 129, 0.45);
+    }
+    .stButton>button[kind="primary"]:hover {
+        box-shadow: 0 8px 18px -4px rgba(16, 185, 129, 0.55);
+        transform: translateY(-1px);
     }
 
+    /* ---------- SIDEBAR ---------- */
     [data-testid="stSidebar"] {
         background-color: #ffffff;
-        border-right: 1px solid #e2e8f0;
+        border-right: 1px solid #eef2f1;
+    }
+    [data-testid="stSidebar"] h3 {
+        font-weight: 700;
+    }
+
+    /* ---------- EXPANDER LOG ITEM ---------- */
+    div[data-testid="stExpander"] {
+        border-radius: 14px !important;
+        border: 1px solid #eef2f1 !important;
+        overflow: hidden;
     }
 </style>
 """
@@ -183,7 +327,7 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
-        
+
         cursor.execute("SELECT COUNT(*) FROM users")
         if cursor.fetchone()[0] == 0:
             cursor.execute('''
@@ -224,8 +368,9 @@ def calculate_target(weight_kg, height_cm, age, gender, activity_level, goal):
 # ----------------------------------------------------
 st.markdown("""
 <div class="app-header">
+    <span class="eyebrow">🥗 Didukung Gemini AI Vision</span>
     <h1>NutriTrack AI</h1>
-    <p>Asisten AI Pengenal Gizi, Pengukur Kalori & Analisis Nutrisi Harian</p>
+    <p>Asisten AI Pengenal Gizi, Pengukur Kalori & Analisis Nutrisi Harian — cukup foto makananmu, sisanya biar AI yang hitung.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -240,10 +385,10 @@ with st.sidebar:
         ["Log & Rekomendasi", "Input Makanan", "Analytics & Trend"],
         index=0
     )
-    
+
     st.divider()
     st.markdown("### 👤 Profil")
-    
+
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id, name, age, gender, height_cm, weight_kg, activity_level, goal, target_calories FROM users ORDER BY id DESC LIMIT 1")
@@ -265,9 +410,9 @@ with st.sidebar:
     weight = st.number_input("Berat Badan (kg)", 30.0, 200.0, float(default_weight))
 
     activity_options = [
-        'Sedentari (Jarang olahraga)', 
-        'Ringan (1-3 hari/minggu)', 
-        'Sedang (3-5 hari/minggu)', 
+        'Sedentari (Jarang olahraga)',
+        'Ringan (1-3 hari/minggu)',
+        'Sedang (3-5 hari/minggu)',
         'Berat (6-7 hari/minggu)'
     ]
     activity = st.selectbox("Aktivitas Harian", activity_options, index=activity_options.index(default_activity) if default_activity in activity_options else 0)
@@ -334,112 +479,155 @@ if menu_selection == "Log & Rekomendasi":
     target = user_target[0] if user_target else 2000.0
     sisa = target - total_cals
 
-    st.markdown("### Ringkasan Kalori Hari Ini")
-    
+    st.markdown('<div class="section-label">Ringkasan</div>', unsafe_allow_html=True)
+    st.markdown("### Kalori Hari Ini")
+
     k1, k2, k3 = st.columns(3)
     with k1:
         st.markdown(f"""
-        <div class="metric-card bg-cal">
+        <div class="metric-card metric-hero">
+            <div class="metric-icon icon-cal">🔥</div>
             <div class="metric-label">Asupan Kalori</div>
-            <div class="metric-value">{total_cals:.0f} <span style="font-size: 1rem; color: #64748b;">/ {target:.0f} kcal</span></div>
+            <div class="metric-value">{total_cals:.0f} <span class="metric-sub">/ {target:.0f} kcal</span></div>
         </div>
         """, unsafe_allow_html=True)
 
     with k2:
         st.markdown(f"""
-        <div class="metric-card bg-protein">
+        <div class="metric-card">
+            <div class="metric-icon icon-left">⚡</div>
             <div class="metric-label">Sisa Kuota Kalori</div>
-            <div class="metric-value" style="color: {'#10b981' if sisa >= 0 else '#ef4444'};">{sisa:.0f} <span style="font-size: 1rem; color: #64748b;">kcal</span></div>
+            <div class="metric-value" style="color: {'#059669' if sisa >= 0 else '#dc2626'};">{sisa:.0f} <span class="metric-sub">kcal</span></div>
         </div>
         """, unsafe_allow_html=True)
 
     with k3:
         pct = min((total_cals / target) * 100, 100) if target > 0 else 0
         st.markdown(f"""
-        <div class="metric-card bg-carbs">
+        <div class="metric-card">
+            <div class="metric-icon icon-target">🎯</div>
             <div class="metric-label">Pencapaian Target</div>
             <div class="metric-value">{pct:.1f}%</div>
         </div>
         """, unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.progress(min(total_cals / target, 1.0) if target > 0 else 0.0)
+    # Custom progress bar (replaces default Streamlit blue bar)
+    pct_width = min((total_cals / target) * 100, 100) if target > 0 else 0
+    bar_class = "over" if sisa < 0 else ""
+    st.markdown(f"""
+    <div class="progress-wrap">
+        <div class="progress-fill {bar_class}" style="width: {pct_width}%;"></div>
+    </div>
+    """, unsafe_allow_html=True)
 
+    st.markdown('<div class="section-label">Detail</div>', unsafe_allow_html=True)
     st.markdown("#### Rincian Makronutrisi")
     m1, m2, m3 = st.columns(3)
     with m1:
         st.markdown(f"""
-        <div class="metric-card bg-protein">
+        <div class="metric-card">
+            <div class="metric-icon icon-protein">🍗</div>
             <div class="metric-label">Protein</div>
-            <div class="metric-value">{total_protein:.1f} <span style="font-size: 1rem; color: #64748b;">g</span></div>
+            <div class="metric-value">{total_protein:.1f} <span class="metric-sub">g</span></div>
         </div>
         """, unsafe_allow_html=True)
     with m2:
         st.markdown(f"""
-        <div class="metric-card bg-carbs">
+        <div class="metric-card">
+            <div class="metric-icon icon-carbs">🍞</div>
             <div class="metric-label">Karbohidrat</div>
-            <div class="metric-value">{total_carbs:.1f} <span style="font-size: 1rem; color: #64748b;">g</span></div>
+            <div class="metric-value">{total_carbs:.1f} <span class="metric-sub">g</span></div>
         </div>
         """, unsafe_allow_html=True)
     with m3:
         st.markdown(f"""
-        <div class="metric-card bg-fat">
+        <div class="metric-card">
+            <div class="metric-icon icon-fat">🥑</div>
             <div class="metric-label">Lemak</div>
-            <div class="metric-value">{total_fat:.1f} <span style="font-size: 1rem; color: #64748b;">g</span></div>
+            <div class="metric-value">{total_fat:.1f} <span class="metric-sub">g</span></div>
         </div>
         """, unsafe_allow_html=True)
 
+    st.markdown("<br>", unsafe_allow_html=True)
     st.divider()
 
     # SECTION REKOMENDASI AI
+    st.markdown('<div class="section-label">Insight</div>', unsafe_allow_html=True)
     st.markdown("### Rekomendasi & Evaluasi AI")
     if total_cals == 0:
-        st.info("Belum ada makanan yang dicatat hari ini. Buka menu **Input Makanan** di sidebar untuk memulai!")
+        st.markdown("""
+        <div class="empty-state">
+            <div class="emoji">🍽️</div>
+            Belum ada makanan yang dicatat hari ini.<br>
+            Buka menu <b>Input Makanan</b> di sidebar untuk memulai!
+        </div>
+        """, unsafe_allow_html=True)
     else:
         if sisa < 0:
-            st.warning(f"⚠️ **Perhatian:** Anda melebihi target harian sebesar {abs(sisa):.0f} kcal. Pertimbangkan untuk memilih makanan rendah kalori untuk sisa hari ini.")
+            st.markdown(f"""
+            <div class="advice-banner advice-warning">
+                ⚠️ <div><b>Perhatian:</b> Anda melebihi target harian sebesar {abs(sisa):.0f} kcal.
+                Pertimbangkan untuk memilih makanan rendah kalori untuk sisa hari ini.</div>
+            </div>
+            """, unsafe_allow_html=True)
         elif sisa < 300:
-            st.success("✅ **Bagus!** Asupan kalori Anda sudah mendekati target harian secara ideal.")
+            st.markdown("""
+            <div class="advice-banner advice-success">
+                ✅ <div><b>Bagus!</b> Asupan kalori Anda sudah mendekati target harian secara ideal.</div>
+            </div>
+            """, unsafe_allow_html=True)
         else:
-            st.info(f"💡 **Info:** Anda masih memiliki sisa kuota kalori sebesar {sisa:.0f} kcal.")
+            st.markdown(f"""
+            <div class="advice-banner advice-info">
+                💡 <div><b>Info:</b> Anda masih memiliki sisa kuota kalori sebesar {sisa:.0f} kcal.</div>
+            </div>
+            """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="section-label">Riwayat</div>', unsafe_allow_html=True)
     st.markdown("### Log Makanan Hari Ini")
 
     if logs:
         for log in logs:
             log_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_eval, method, logged_at, img_path = log
-            
-            with st.expander(f"{food_name} — {calories:.0f} kcal ({logged_at[-8:-3]})"):
+
+            with st.expander(f"🍽️ {food_name} — {calories:.0f} kcal ({logged_at[-8:-3]})"):
                 col_a, col_b = st.columns([3, 1])
-                
+
                 with col_a:
-                    st.write(f"**Porsi:** {weight_g} gram | **Input:** `{method}`")
+                    method_label = "📸 AI Photo" if method == "ai_photo" else "✍️ Manual"
+                    st.write(f"**Porsi:** {weight_g} gram &nbsp;·&nbsp; **Input:** {method_label}")
                     st.write(f"**Nutrisi:** Protein {protein_g}g · Karbo {carbs_g}g · Lemak {fat_g}g")
                     st.info(f"**AI Feedback:** {ai_eval if ai_eval else 'Tidak ada catatan.'}")
                     if img_path and os.path.exists(img_path):
                         st.image(img_path, width=160)
-                
+
                 with col_b:
-                    if st.button("Hapus Log", key=f"del_{log_id}", type="secondary"):
+                    if st.button("🗑️ Hapus Log", key=f"del_{log_id}", type="secondary"):
                         with sqlite3.connect(DB_NAME) as conn:
                             cursor = conn.cursor()
                             cursor.execute("DELETE FROM daily_logs WHERE id = ?", (log_id,))
                             conn.commit()
-                        
+
                         if img_path and os.path.exists(img_path):
                             os.remove(img_path)
-                            
+
                         st.toast(f"'{food_name}' telah dihapus.")
                         st.rerun()
     else:
-        st.write("Belum ada riwayat konsumsi yang dicatat hari ini.")
+        st.markdown("""
+        <div class="empty-state">
+            <div class="emoji">📋</div>
+            Belum ada riwayat konsumsi yang dicatat hari ini.
+        </div>
+        """, unsafe_allow_html=True)
 
 
 # ====================================================
 # PAGE 2: INPUT MAKANAN
 # ====================================================
 elif menu_selection == "Input Makanan":
+    st.markdown('<div class="section-label">Logging</div>', unsafe_allow_html=True)
     st.markdown("### Catat Makanan Kamu")
     input_type = st.radio("Pilih Metode Logging:", ["Scan Foto Makanan (AI Vision)", "Input Manual"], horizontal=True)
 
@@ -447,24 +635,24 @@ elif menu_selection == "Input Makanan":
 
     if input_type == "Scan Foto Makanan (AI Vision)":
         uploaded_file = st.file_uploader("Unggah foto hidangan kamu di sini", type=["jpg", "jpeg", "png"])
-        
+
         if uploaded_file:
             col_img, col_info = st.columns([1, 2])
             image = Image.open(uploaded_file)
-            
+
             with col_img:
                 st.image(image, caption="Foto yang Diunggah", use_container_width=True)
 
             with col_info:
                 st.info("Pindai gambar dengan Gemini AI Vision untuk menghitung estimasi kalori dan makronutrisi secara otomatis.")
-                if st.button("Analisis Nutrisi dengan AI", type="primary", use_container_width=True):
+                if st.button("✨ Analisis Nutrisi dengan AI", type="primary", use_container_width=True):
                     if not api_key:
                         st.error("API Key belum terkonfigurasi!")
                     else:
                         with st.spinner("Menganalisis jenis makanan & kandungan nutrisi..."):
                             try:
                                 prompt = f"Identifikasi makanan ini secara presisi dan berikan analisis nutrisi serta feedback singkat dalam Bahasa Indonesia untuk pengguna dengan target kesehatan: '{default_goal}'."
-                                
+
                                 response = client.models.generate_content(
                                     model='gemini-2.5-flash',
                                     contents=[image, prompt],
@@ -473,7 +661,7 @@ elif menu_selection == "Input Makanan":
                                         response_schema=NutritionAnalysis,
                                     ),
                                 )
-                                
+
                                 parsed_data = NutritionAnalysis.model_validate_json(response.text)
 
                                 now_str = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -489,13 +677,13 @@ elif menu_selection == "Input Makanan":
                                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_photo', ?)
                                     ''', (
                                         active_user_id,
-                                        parsed_data.food_name, 
-                                        parsed_data.estimated_weight_g, 
-                                        parsed_data.calories, 
-                                        parsed_data.protein_g, 
-                                        parsed_data.carbs_g, 
-                                        parsed_data.fat_g, 
-                                        parsed_data.ai_feedback, 
+                                        parsed_data.food_name,
+                                        parsed_data.estimated_weight_g,
+                                        parsed_data.calories,
+                                        parsed_data.protein_g,
+                                        parsed_data.carbs_g,
+                                        parsed_data.fat_g,
+                                        parsed_data.ai_feedback,
                                         file_path,
                                         current_time
                                     ))
@@ -518,9 +706,9 @@ elif menu_selection == "Input Makanan":
                 protein = st.number_input("Protein (gram)", 0.0, 300.0, 25.0)
                 carbs = st.number_input("Karbohidrat (gram)", 0.0, 500.0, 10.0)
                 fat = st.number_input("Lemak (gram)", 0.0, 300.0, 8.0)
-            
+
             feedback = st.text_input("Catatan Pribadi", "Input manual pengguna.")
-            
+
             submit = st.form_submit_button("Tambahkan ke Log", type="primary", use_container_width=True)
             if submit:
                 current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -538,6 +726,7 @@ elif menu_selection == "Input Makanan":
 # PAGE 3: ANALYTICS & TREND
 # ====================================================
 elif menu_selection == "Analytics & Trend":
+    st.markdown('<div class="section-label">Analitik</div>', unsafe_allow_html=True)
     st.markdown("### Trend Asupan Kalori (7 Hari Terakhir)")
 
     with sqlite3.connect(DB_NAME) as conn:
@@ -549,7 +738,7 @@ elif menu_selection == "Analytics & Trend":
             ORDER BY log_date ASC
         """
         df = pd.read_sql_query(query, conn)
-        
+
         cursor = conn.cursor()
         cursor.execute("SELECT target_calories FROM users WHERE id = ?", (active_user_id,))
         user_target = cursor.fetchone()
@@ -558,32 +747,68 @@ elif menu_selection == "Analytics & Trend":
 
     if not df.empty:
         df['log_date'] = pd.to_datetime(df['log_date'])
-        
+
         base = alt.Chart(df).encode(
             x=alt.X('log_date:T', title='Tanggal', axis=alt.Axis(format='%d %b')),
             y=alt.Y('total_calories:Q', title='Kalori (kcal)'),
             tooltip=['log_date:T', 'total_calories:Q']
         )
 
-        line = base.mark_line(color='#10b981', strokeWidth=3, point=True)
-        
+        area = base.mark_area(
+            line={'color': '#10b981', 'strokeWidth': 3},
+            point=alt.OverlayMarkDef(color='#059669', size=60),
+            color=alt.Gradient(
+                gradient='linear',
+                stops=[
+                    alt.GradientStop(color='#d1fae5', offset=0),
+                    alt.GradientStop(color='#ffffff', offset=1)
+                ],
+                x1=1, x2=1, y1=1, y2=0
+            )
+        )
+
         target_df = pd.DataFrame({'Target': [target_val]})
-        rule = alt.Chart(target_df).mark_rule(color='#ef4444', strokeDash=[5, 5]).encode(
+        rule = alt.Chart(target_df).mark_rule(color='#ef4444', strokeDash=[5, 5], strokeWidth=2).encode(
             y='Target:Q'
         )
 
-        chart = (line + rule).properties(
+        chart = (area + rule).properties(
             height=380
         ).configure_view(
             strokeWidth=0
+        ).configure_axis(
+            grid=True,
+            gridColor='#eef2f1',
+            domain=False
         )
 
+        st.markdown('<div class="metric-card" style="padding: 1.5rem;">', unsafe_allow_html=True)
         st.altair_chart(chart, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
         st.caption("🔴 **Garis Merah Putus-putus:** Target Kalori Harian")
-        
+
         st.markdown("<br>", unsafe_allow_html=True)
         col_s1, col_s2 = st.columns(2)
-        col_s1.metric("Rata-rata Harian", f"{df['total_calories'].mean():.0f} kcal")
-        col_s2.metric("Konsumsi Puncak", f"{df['total_calories'].max():.0f} kcal")
+        with col_s1:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-icon icon-left">📊</div>
+                <div class="metric-label">Rata-rata Harian</div>
+                <div class="metric-value">{df['total_calories'].mean():.0f} <span class="metric-sub">kcal</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_s2:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-icon icon-target">📈</div>
+                <div class="metric-label">Konsumsi Puncak</div>
+                <div class="metric-value">{df['total_calories'].max():.0f} <span class="metric-sub">kcal</span></div>
+            </div>
+            """, unsafe_allow_html=True)
     else:
-        st.info("Data belum cukup untuk menampilkan grafik tren 7 hari terakhir.")
+        st.markdown("""
+        <div class="empty-state">
+            <div class="emoji">📉</div>
+            Data belum cukup untuk menampilkan grafik tren 7 hari terakhir.
+        </div>
+        """, unsafe_allow_html=True)
