@@ -275,7 +275,7 @@ with st.sidebar:
     goal_options = ['Turunkan Berat Badan', 'Jaga Berat Badan', 'Naikkan Berat Badan']
     goal = st.selectbox("Target Kesehatan", goal_options, index=goal_options.index(default_goal) if default_goal in goal_options else 0)
 
-    if st.button("💾 Simpan & Hitung Ulang", use_container_width=True, type="primary"):
+    if st.button("Simpan & Hitung Ulang", use_container_width=True, type="primary"):
         target_cal = calculate_target(weight, height, age, gender, activity, goal)
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
