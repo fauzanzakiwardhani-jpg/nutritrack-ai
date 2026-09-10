@@ -1,0 +1,589 @@
+import json
+import os
+import sqlite3
+from datetime import datetime, timedelta
+
+import altair as alt
+import pandas as pd
+import streamlit as st
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+from PIL import Image
+from pydantic import BaseModel, Field
+
+# ----------------------------------------------------
+# 1. PAGE CONFIGURATION & SETUP
+# ----------------------------------------------------
+st.set_page_config(
+    page_title="AI NutriTrack - Smart Calorie & Health Dashboard",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+load_dotenv()
+api_key = os.getenv("GEMINI_API_KEY")
+
+if api_key:
+    client = genai.Client(api_key=api_key)
+else:
+    st.error("GEMINI_API_KEY tidak ditemukan di file .env!")
+
+DB_NAME = "gizi_app.db"
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+# ----------------------------------------------------
+# 2. CUSTOM CSS INJECTION (FIXED HAMBURGER & LAYOUT)
+# ----------------------------------------------------
+CUSTOM_CSS = """
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Plus Jakarta Sans', sans-serif;
+        background-color: #f8fafc;
+        color: #0f172a;
+    }
+
+    /* Sembunyikan Footer & Menu Tiga Titik Kanan Atas */
+    footer { visibility: hidden; }
+    #MainMenu { visibility: hidden; }
+    
+    /* Atur Header dan Tombol Sidebar (Hamburger ☰) */
+    header[data-testid="stHeader"] {
+        background-color: transparent !important;
+        z-index: 99999 !important;
+    }
+    
+    /* Ubah atau pastikan tombol toggle sidebar menampilkan ikon hamburger */
+    button[data-testid="stSidebarCollapseButton"], 
+    button[data-testid="baseButton-header"] {
+        color: #0f172a !important;
+    }
+
+    .app-header {
+        background: linear-gradient(135deg, #059669 0%, #10b981 50%, #34d399 100%);
+        padding: 2rem 2.5rem;
+        border-radius: 20px;
+        color: white;
+        margin-bottom: 2rem;
+        box-shadow: 0 10px 25px -5px rgba(16, 185, 129, 0.25);
+    }
+    .app-header h1 {
+        color: white !important;
+        font-weight: 800;
+        font-size: 2.2rem;
+        margin: 0;
+    }
+    .app-header p {
+        color: #e6fffa;
+        font-size: 1rem;
+        margin-top: 0.5rem;
+        margin-bottom: 0;
+    }
+
+    .metric-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 16px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .metric-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08);
+    }
+    .metric-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .metric-value {
+        font-size: 1.875rem;
+        font-weight: 800;
+        color: #0f172a;
+        margin-top: 0.25rem;
+    }
+
+    .bg-protein { border-left: 5px solid #3b82f6; }
+    .bg-carbs { border-left: 5px solid #f59e0b; }
+    .bg-fat { border-left: 5px solid #ef4444; }
+    .bg-cal { border-left: 5px solid #10b981; }
+
+    .stButton>button {
+        border-radius: 12px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+    }
+    .stButton>button[kind="primary"] {
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        border: none;
+    }
+
+    [data-testid="stSidebar"] {
+        background-color: #ffffff;
+        border-right: 1px solid #e2e8f0;
+    }
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+# ----------------------------------------------------
+# 3. SCHEMA STRUCTURED OUTPUT (PYDANTIC)
+# ----------------------------------------------------
+class NutritionAnalysis(BaseModel):
+    food_name: str = Field(description="Nama makanan dalam Bahasa Indonesia")
+    estimated_weight_g: float = Field(description="Estimasi berat porsi dalam gram")
+    calories: float = Field(description="Total kalori dalam kcal")
+    protein_g: float = Field(description="Kandungan protein dalam gram")
+    carbs_g: float = Field(description="Kandungan karbohidrat dalam gram")
+    fat_g: float = Field(description="Kandungan lemak dalam gram")
+    ai_feedback: str = Field(description="Ulasan gizi dan saran singkat dalam Bahasa Indonesia")
+
+
+# ----------------------------------------------------
+# 4. DATABASE INITIALIZATION
+# ----------------------------------------------------
+def init_db():
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                age INTEGER,
+                gender TEXT,
+                height_cm REAL,
+                weight_kg REAL,
+                activity_level TEXT,
+                goal TEXT,
+                target_calories REAL
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS daily_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                food_name TEXT,
+                weight_g REAL,
+                calories REAL,
+                protein_g REAL,
+                carbs_g REAL,
+                fat_g REAL,
+                ai_feedback TEXT,
+                image_path TEXT,
+                input_method TEXT,
+                logged_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        cursor.execute("SELECT COUNT(*) FROM users")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute('''
+                INSERT INTO users (name, age, gender, height_cm, weight_kg, activity_level, goal, target_calories)
+                VALUES ('Pengguna', 22, 'Laki-laki', 170.0, 65.0, 'Sedentari (Jarang olahraga)', 'Turunkan Berat Badan', 1800)
+            ''')
+        conn.commit()
+
+init_db()
+
+
+# ----------------------------------------------------
+# 5. CALORIE TARGET CALCULATOR
+# ----------------------------------------------------
+def calculate_target(weight_kg, height_cm, age, gender, activity_level, goal):
+    if gender == 'Laki-laki':
+        bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) + 5
+    else:
+        bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) - 161
+
+    multipliers = {
+        'Sedentari (Jarang olahraga)': 1.2,
+        'Ringan (1-3 hari/minggu)': 1.375,
+        'Sedang (3-5 hari/minggu)': 1.55,
+        'Berat (6-7 hari/minggu)': 1.725
+    }
+    tdee = bmr * multipliers.get(activity_level, 1.2)
+    adjustments = {
+        'Turunkan Berat Badan': -400,
+        'Jaga Berat Badan': 0,
+        'Naikkan Berat Badan': 400
+    }
+    return round(tdee + adjustments.get(goal, 0))
+
+
+# ----------------------------------------------------
+# 6. HEADER BANNER
+# ----------------------------------------------------
+st.markdown("""
+<div class="app-header">
+    <h1>NutriTrack AI</h1>
+    <p>Asisten AI Pengenal Gizi, Pengukur Kalori & Analisis Nutrisi Harian</p>
+</div>
+""", unsafe_allow_html=True)
+
+
+# ----------------------------------------------------
+# 7. SIDEBAR NAVIGATION & PROFILE MANAGEMENT
+# ----------------------------------------------------
+with st.sidebar:
+    st.markdown("Menu")
+    menu_selection = st.radio(
+        "Pilih Halaman:",
+        ["Log & Rekomendasi", "Input Makanan", "Analytics & Trend"],
+        index=0
+    )
+    
+    st.divider()
+    st.markdown("### 👤 Profil")
+    
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, age, gender, height_cm, weight_kg, activity_level, goal, target_calories FROM users ORDER BY id DESC LIMIT 1")
+        latest_user = cursor.fetchone()
+
+    active_user_id = latest_user[0] if latest_user else 1
+    default_name = latest_user[1] if latest_user else "Pengguna"
+    default_age = latest_user[2] if latest_user else 22
+    default_gender = latest_user[3] if latest_user else "Laki-laki"
+    default_height = latest_user[4] if latest_user else 170.0
+    default_weight = latest_user[5] if latest_user else 65.0
+    default_activity = latest_user[6] if latest_user else 'Sedentari (Jarang olahraga)'
+    default_goal = latest_user[7] if latest_user else 'Turunkan Berat Badan'
+
+    name = st.text_input("Nama Pengguna", default_name)
+    age = st.number_input("Usia (tahun)", 10, 100, int(default_age))
+    gender = st.selectbox("Jenis Kelamin", ["Laki-laki", "Perempuan"], index=0 if default_gender == "Laki-laki" else 1)
+    height = st.number_input("Tinggi Badan (cm)", 100.0, 250.0, float(default_height))
+    weight = st.number_input("Berat Badan (kg)", 30.0, 200.0, float(default_weight))
+
+    activity_options = [
+        'Sedentari (Jarang olahraga)', 
+        'Ringan (1-3 hari/minggu)', 
+        'Sedang (3-5 hari/minggu)', 
+        'Berat (6-7 hari/minggu)'
+    ]
+    activity = st.selectbox("Aktivitas Harian", activity_options, index=activity_options.index(default_activity) if default_activity in activity_options else 0)
+
+    goal_options = ['Turunkan Berat Badan', 'Jaga Berat Badan', 'Naikkan Berat Badan']
+    goal = st.selectbox("Target Kesehatan", goal_options, index=goal_options.index(default_goal) if default_goal in goal_options else 0)
+
+    if st.button("💾 Simpan & Hitung Ulang", use_container_width=True, type="primary"):
+        target_cal = calculate_target(weight, height, age, gender, activity, goal)
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO users (name, age, gender, height_cm, weight_kg, activity_level, goal, target_calories)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (name, age, gender, height, weight, activity, goal, target_cal))
+            conn.commit()
+        st.success(f"Target baru: {target_cal} kcal/hari")
+        st.rerun()
+
+    st.divider()
+    st.markdown("Pengaturan Data")
+    if st.button("Reset Semua Data", type="secondary", use_container_width=True):
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM daily_logs")
+            cursor.execute("DELETE FROM users")
+            conn.commit()
+
+        if os.path.exists(UPLOAD_DIR):
+            for file in os.listdir(UPLOAD_DIR):
+                file_path = os.path.join(UPLOAD_DIR, file)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+
+        init_db()
+        st.toast("Data berhasil dibersihkan!", icon="🧹")
+        st.rerun()
+
+
+# ----------------------------------------------------
+# 8. MAIN CONTENT ROUTING
+# ----------------------------------------------------
+
+# ====================================================
+# PAGE 1: HALAMAN UTAMA (LOG HARIAN & REKOMENDASI)
+# ====================================================
+if menu_selection == "Log & Rekomendasi":
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT SUM(calories), SUM(protein_g), SUM(carbs_g), SUM(fat_g) FROM daily_logs WHERE DATE(logged_at) = ?", (today_str,))
+        totals = cursor.fetchone()
+
+        cursor.execute("SELECT target_calories FROM users WHERE id = ?", (active_user_id,))
+        user_target = cursor.fetchone()
+
+        cursor.execute("SELECT id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, input_method, logged_at, image_path FROM daily_logs WHERE DATE(logged_at) = ? ORDER BY id DESC", (today_str,))
+        logs = cursor.fetchall()
+
+    total_cals = totals[0] if totals and totals[0] else 0.0
+    total_protein = totals[1] if totals and totals[1] else 0.0
+    total_carbs = totals[2] if totals and totals[2] else 0.0
+    total_fat = totals[3] if totals and totals[3] else 0.0
+    target = user_target[0] if user_target else 2000.0
+    sisa = target - total_cals
+
+    st.markdown("### Ringkasan Kalori Hari Ini")
+    
+    k1, k2, k3 = st.columns(3)
+    with k1:
+        st.markdown(f"""
+        <div class="metric-card bg-cal">
+            <div class="metric-label">Asupan Kalori</div>
+            <div class="metric-value">{total_cals:.0f} <span style="font-size: 1rem; color: #64748b;">/ {target:.0f} kcal</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with k2:
+        st.markdown(f"""
+        <div class="metric-card bg-protein">
+            <div class="metric-label">Sisa Kuota Kalori</div>
+            <div class="metric-value" style="color: {'#10b981' if sisa >= 0 else '#ef4444'};">{sisa:.0f} <span style="font-size: 1rem; color: #64748b;">kcal</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with k3:
+        pct = min((total_cals / target) * 100, 100) if target > 0 else 0
+        st.markdown(f"""
+        <div class="metric-card bg-carbs">
+            <div class="metric-label">Pencapaian Target</div>
+            <div class="metric-value">{pct:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.progress(min(total_cals / target, 1.0) if target > 0 else 0.0)
+
+    st.markdown("#### Rincian Makronutrisi")
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.markdown(f"""
+        <div class="metric-card bg-protein">
+            <div class="metric-label">Protein</div>
+            <div class="metric-value">{total_protein:.1f} <span style="font-size: 1rem; color: #64748b;">g</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+    with m2:
+        st.markdown(f"""
+        <div class="metric-card bg-carbs">
+            <div class="metric-label">Karbohidrat</div>
+            <div class="metric-value">{total_carbs:.1f} <span style="font-size: 1rem; color: #64748b;">g</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+    with m3:
+        st.markdown(f"""
+        <div class="metric-card bg-fat">
+            <div class="metric-label">Lemak</div>
+            <div class="metric-value">{total_fat:.1f} <span style="font-size: 1rem; color: #64748b;">g</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # SECTION REKOMENDASI AI
+    st.markdown("### Rekomendasi & Evaluasi AI")
+    if total_cals == 0:
+        st.info("Belum ada makanan yang dicatat hari ini. Buka menu **Input Makanan** di sidebar untuk memulai!")
+    else:
+        if sisa < 0:
+            st.warning(f"⚠️ **Perhatian:** Anda melebihi target harian sebesar {abs(sisa):.0f} kcal. Pertimbangkan untuk memilih makanan rendah kalori untuk sisa hari ini.")
+        elif sisa < 300:
+            st.success("✅ **Bagus!** Asupan kalori Anda sudah mendekati target harian secara ideal.")
+        else:
+            st.info(f"💡 **Info:** Anda masih memiliki sisa kuota kalori sebesar {sisa:.0f} kcal.")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("### Log Makanan Hari Ini")
+
+    if logs:
+        for log in logs:
+            log_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_eval, method, logged_at, img_path = log
+            
+            with st.expander(f"{food_name} — {calories:.0f} kcal ({logged_at[-8:-3]})"):
+                col_a, col_b = st.columns([3, 1])
+                
+                with col_a:
+                    st.write(f"**Porsi:** {weight_g} gram | **Input:** `{method}`")
+                    st.write(f"**Nutrisi:** Protein {protein_g}g · Karbo {carbs_g}g · Lemak {fat_g}g")
+                    st.info(f"**AI Feedback:** {ai_eval if ai_eval else 'Tidak ada catatan.'}")
+                    if img_path and os.path.exists(img_path):
+                        st.image(img_path, width=160)
+                
+                with col_b:
+                    if st.button("Hapus Log", key=f"del_{log_id}", type="secondary"):
+                        with sqlite3.connect(DB_NAME) as conn:
+                            cursor = conn.cursor()
+                            cursor.execute("DELETE FROM daily_logs WHERE id = ?", (log_id,))
+                            conn.commit()
+                        
+                        if img_path and os.path.exists(img_path):
+                            os.remove(img_path)
+                            
+                        st.toast(f"'{food_name}' telah dihapus.")
+                        st.rerun()
+    else:
+        st.write("Belum ada riwayat konsumsi yang dicatat hari ini.")
+
+
+# ====================================================
+# PAGE 2: INPUT MAKANAN
+# ====================================================
+elif menu_selection == "Input Makanan":
+    st.markdown("### Catat Makanan Kamu")
+    input_type = st.radio("Pilih Metode Logging:", ["Scan Foto Makanan (AI Vision)", "Input Manual"], horizontal=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    if input_type == "Scan Foto Makanan (AI Vision)":
+        uploaded_file = st.file_uploader("Unggah foto hidangan kamu di sini", type=["jpg", "jpeg", "png"])
+        
+        if uploaded_file:
+            col_img, col_info = st.columns([1, 2])
+            image = Image.open(uploaded_file)
+            
+            with col_img:
+                st.image(image, caption="Foto yang Diunggah", use_container_width=True)
+
+            with col_info:
+                st.info("Pindai gambar dengan Gemini AI Vision untuk menghitung estimasi kalori dan makronutrisi secara otomatis.")
+                if st.button("Analisis Nutrisi dengan AI", type="primary", use_container_width=True):
+                    if not api_key:
+                        st.error("API Key belum terkonfigurasi!")
+                    else:
+                        with st.spinner("Menganalisis jenis makanan & kandungan nutrisi..."):
+                            try:
+                                prompt = f"Identifikasi makanan ini secara presisi dan berikan analisis nutrisi serta feedback singkat dalam Bahasa Indonesia untuk pengguna dengan target kesehatan: '{default_goal}'."
+                                
+                                response = client.models.generate_content(
+                                    model='gemini-2.5-flash',
+                                    contents=[image, prompt],
+                                    config=types.GenerateContentConfig(
+                                        response_mime_type="application/json",
+                                        response_schema=NutritionAnalysis,
+                                    ),
+                                )
+                                
+                                parsed_data = NutritionAnalysis.model_validate_json(response.text)
+
+                                now_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+                                file_path = os.path.join(UPLOAD_DIR, f"{now_str}_{uploaded_file.name}")
+                                image.save(file_path)
+
+                                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+                                with sqlite3.connect(DB_NAME) as conn:
+                                    cursor = conn.cursor()
+                                    cursor.execute('''
+                                        INSERT INTO daily_logs (user_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, image_path, input_method, logged_at)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_photo', ?)
+                                    ''', (
+                                        active_user_id,
+                                        parsed_data.food_name, 
+                                        parsed_data.estimated_weight_g, 
+                                        parsed_data.calories, 
+                                        parsed_data.protein_g, 
+                                        parsed_data.carbs_g, 
+                                        parsed_data.fat_g, 
+                                        parsed_data.ai_feedback, 
+                                        file_path,
+                                        current_time
+                                    ))
+                                    conn.commit()
+
+                                st.balloons()
+                                st.success(f"Berhasil mencatat: **{parsed_data.food_name}** ({parsed_data.calories} kcal)")
+                            except Exception as e:
+                                st.error(f"Terjadi kesalahan analisis: {e}")
+
+    else:
+        with st.form("manual_form", clear_on_submit=True):
+            st.markdown("##### Form Input Detail Makanan")
+            c1, c2 = st.columns(2)
+            with c1:
+                food_name = st.text_input("Nama Makanan", placeholder="Contoh: Ayam Bakar Dada")
+                weight_g = st.number_input("Estimasi Berat (gram)", 10, 1000, 150)
+                cals = st.number_input("Kalori Total (kcal)", 0, 3000, 250)
+            with c2:
+                protein = st.number_input("Protein (gram)", 0.0, 300.0, 25.0)
+                carbs = st.number_input("Karbohidrat (gram)", 0.0, 500.0, 10.0)
+                fat = st.number_input("Lemak (gram)", 0.0, 300.0, 8.0)
+            
+            feedback = st.text_input("Catatan Pribadi", "Input manual pengguna.")
+            
+            submit = st.form_submit_button("Tambahkan ke Log", type="primary", use_container_width=True)
+            if submit:
+                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                with sqlite3.connect(DB_NAME) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT INTO daily_logs (user_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, input_method, logged_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?)
+                    ''', (active_user_id, food_name, weight_g, cals, protein, carbs, fat, feedback, current_time))
+                    conn.commit()
+                st.toast("Makanan berhasil ditambahkan!", icon="✅")
+
+
+# ====================================================
+# PAGE 3: ANALYTICS & TREND
+# ====================================================
+elif menu_selection == "Analytics & Trend":
+    st.markdown("### Trend Asupan Kalori (7 Hari Terakhir)")
+
+    with sqlite3.connect(DB_NAME) as conn:
+        query = """
+            SELECT DATE(logged_at) as log_date, SUM(calories) as total_calories
+            FROM daily_logs
+            WHERE DATE(logged_at) >= DATE('now', '-7 days', 'localtime')
+            GROUP BY DATE(logged_at)
+            ORDER BY log_date ASC
+        """
+        df = pd.read_sql_query(query, conn)
+        
+        cursor = conn.cursor()
+        cursor.execute("SELECT target_calories FROM users WHERE id = ?", (active_user_id,))
+        user_target = cursor.fetchone()
+
+    target_val = user_target[0] if user_target else 2000.0
+
+    if not df.empty:
+        df['log_date'] = pd.to_datetime(df['log_date'])
+        
+        base = alt.Chart(df).encode(
+            x=alt.X('log_date:T', title='Tanggal', axis=alt.Axis(format='%d %b')),
+            y=alt.Y('total_calories:Q', title='Kalori (kcal)'),
+            tooltip=['log_date:T', 'total_calories:Q']
+        )
+
+        line = base.mark_line(color='#10b981', strokeWidth=3, point=True)
+        
+        target_df = pd.DataFrame({'Target': [target_val]})
+        rule = alt.Chart(target_df).mark_rule(color='#ef4444', strokeDash=[5, 5]).encode(
+            y='Target:Q'
+        )
+
+        chart = (line + rule).properties(
+            height=380
+        ).configure_view(
+            strokeWidth=0
+        )
+
+        st.altair_chart(chart, use_container_width=True)
+        st.caption("🔴 **Garis Merah Putus-putus:** Target Kalori Harian")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_s1, col_s2 = st.columns(2)
+        col_s1.metric("Rata-rata Harian", f"{df['total_calories'].mean():.0f} kcal")
+        col_s2.metric("Konsumsi Puncak", f"{df['total_calories'].max():.0f} kcal")
+    else:
+        st.info("Data belum cukup untuk menampilkan grafik tren 7 hari terakhir.")
