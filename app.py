@@ -23,6 +23,12 @@ try:
 except ImportError:
     FPDF_AVAILABLE = False
 
+try:
+    from streamlit_float import float_init
+    FLOAT_AVAILABLE = True
+except ImportError:
+    FLOAT_AVAILABLE = False
+
 # ----------------------------------------------------
 # 1. PAGE CONFIGURATION & SETUP
 # ----------------------------------------------------
@@ -389,6 +395,50 @@ CUSTOM_CSS = """
         border-radius: 14px !important;
         border: 1px solid #eef2f1 !important;
         overflow: hidden;
+    }
+
+    /* ---------- VIRTUAL ASSISTANT (FLOATING CHAT) ---------- */
+    .st-key-va_toggle_btn button {
+        width: 58px !important;
+        height: 58px !important;
+        border-radius: 50% !important;
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+        border: none !important;
+        box-shadow: 0 10px 24px -6px rgba(5, 150, 105, 0.5) !important;
+        font-size: 1.5rem !important;
+        color: white !important;
+        padding: 0 !important;
+        transition: transform 0.15s ease !important;
+    }
+    .st-key-va_toggle_btn button:hover {
+        transform: scale(1.06);
+    }
+    .st-key-va_panel {
+        background: white;
+        border-radius: 20px;
+        border: 1px solid #eef2f1;
+        box-shadow: 0 24px 48px -12px rgba(15, 23, 42, 0.25);
+        padding: 0;
+        overflow: hidden;
+    }
+    .va-header {
+        background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+        color: white;
+        font-weight: 800;
+        font-size: 0.95rem;
+        padding: 14px 18px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .va-body-wrap { padding: 10px 14px 4px 14px; }
+    .va-hint {
+        font-size: 0.78rem;
+        color: #94a3b8;
+        padding: 0 14px 10px 14px;
+    }
+    .st-key-va_input_box input {
+        border-radius: 999px !important;
     }
 </style>
 """
@@ -1460,3 +1510,129 @@ elif "Export Data" in menu_selection:
                 )
             else:
                 st.warning("Library `fpdf2` belum terpasang. Jalankan `pip install fpdf2` untuk mengaktifkan export PDF.")
+
+
+# ====================================================
+# 9. VIRTUAL ASSISTANT (FLOATING CHAT — MUNCUL DI SEMUA HALAMAN)
+# ====================================================
+def get_va_context():
+    """Ambil ringkasan data gizi & hidrasi hari ini untuk konteks jawaban asisten AI."""
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT SUM(calories), SUM(protein_g), SUM(carbs_g), SUM(fat_g) FROM daily_logs WHERE DATE(logged_at) = ?", (today_str,))
+        totals = cursor.fetchone()
+        cursor.execute("SELECT target_calories, target_protein_g, target_carbs_g, target_fat_g FROM users WHERE id = ?", (active_user_id,))
+        targets_row = cursor.fetchone()
+        cursor.execute("SELECT SUM(amount_ml) FROM water_logs WHERE DATE(logged_at) = ?", (today_str,))
+        water_row = cursor.fetchone()
+        cursor.execute("SELECT food_name, calories FROM daily_logs WHERE DATE(logged_at) = ? ORDER BY id DESC LIMIT 5", (today_str,))
+        recent_foods = cursor.fetchall()
+
+    cal_total = totals[0] if totals and totals[0] else 0.0
+    p_total = totals[1] if totals and totals[1] else 0.0
+    c_total = totals[2] if totals and totals[2] else 0.0
+    f_total = totals[3] if totals and totals[3] else 0.0
+    cal_target = targets_row[0] if targets_row and targets_row[0] else 2000.0
+    p_target = targets_row[1] if targets_row and targets_row[1] else target_protein_g
+    c_target = targets_row[2] if targets_row and targets_row[2] else target_carbs_g
+    f_target = targets_row[3] if targets_row and targets_row[3] else target_fat_g
+    water_total = water_row[0] if water_row and water_row[0] else 0.0
+
+    food_list = ", ".join([f"{f[0]} ({f[1]:.0f} kcal)" for f in recent_foods]) if recent_foods else "belum ada makanan dicatat hari ini"
+
+    return f"""
+    Data gizi & hidrasi pengguna HARI INI (gunakan ini untuk menjawab pertanyaan personal, jangan tampilkan mentah-mentah kecuali diminta):
+    - Kalori: {cal_total:.0f} dari target {cal_target:.0f} kcal (sisa {cal_target - cal_total:.0f} kcal)
+    - Protein: {p_total:.1f}g dari target {p_target:.0f}g
+    - Karbohidrat: {c_total:.1f}g dari target {c_target:.0f}g
+    - Lemak: {f_total:.1f}g dari target {f_target:.0f}g
+    - Air minum: {water_total:.0f}ml dari target {target_water_ml:.0f}ml
+    - Makanan terakhir dicatat: {food_list}
+    - Target kesehatan pengguna: {default_goal}
+    """.strip()
+
+
+def handle_va_send():
+    user_msg = st.session_state.get("va_input_box", "").strip()
+    if not user_msg:
+        return
+
+    st.session_state.va_messages.append({"role": "user", "content": user_msg})
+
+    if not api_key:
+        st.session_state.va_messages.append({"role": "assistant", "content": "API Key belum terkonfigurasi, jadi saya belum bisa menjawab. Cek file .env kamu ya."})
+        st.session_state.va_input_box = ""
+        return
+
+    context = get_va_context()
+    full_prompt = f"""
+    Kamu adalah "Nutri", asisten AI ramah di aplikasi NutriTrack AI. Tugasmu menjawab pertanyaan
+    seputar gizi/makanan secara umum, DAN memberi saran personal berdasarkan data pengguna berikut
+    jika relevan dengan pertanyaannya. Jawab singkat, jelas, dan hangat dalam Bahasa Indonesia.
+
+    {context}
+
+    Pertanyaan pengguna: {user_msg}
+    """
+
+    try:
+        interaction = client.interactions.create(
+            model=GEMINI_MODEL,
+            input=full_prompt,
+            previous_interaction_id=st.session_state.get("va_last_interaction_id"),
+        )
+        st.session_state.va_last_interaction_id = interaction.id
+        answer = interaction.output_text
+    except Exception as e:
+        answer = f"Maaf, terjadi kesalahan saat memproses: {e}"
+
+    st.session_state.va_messages.append({"role": "assistant", "content": answer})
+    st.session_state.va_input_box = ""
+
+
+if "va_open" not in st.session_state:
+    st.session_state.va_open = False
+if "va_messages" not in st.session_state:
+    st.session_state.va_messages = [
+        {"role": "assistant", "content": "Halo! 👋 Saya Nutri, asisten gizi kamu. Tanya apa saja soal makanan, atau soal sisa kuota kalori & makro kamu hari ini."}
+    ]
+if "va_last_interaction_id" not in st.session_state:
+    st.session_state.va_last_interaction_id = None
+
+if FLOAT_AVAILABLE:
+    float_init()
+
+    # Tombol bulat mengambang untuk toggle buka/tutup chat
+    toggle_col = st.container(key="va_toggle_btn")
+    with toggle_col:
+        toggle_icon = "✖️" if st.session_state.va_open else "🤖"
+        if st.button(toggle_icon, key="va_toggle_button"):
+            st.session_state.va_open = not st.session_state.va_open
+    toggle_col.float("position: fixed; bottom: 24px; right: 24px; z-index: 999995; width: 58px;")
+
+    # Panel chat mengambang (hanya dirender saat dibuka)
+    if st.session_state.va_open:
+        panel_col = st.container(key="va_panel")
+        with panel_col:
+            st.markdown('<div class="va-header">🤖 Nutri — Asisten Gizi AI</div>', unsafe_allow_html=True)
+            st.markdown('<div class="va-body-wrap">', unsafe_allow_html=True)
+            with st.container(height=300):
+                for msg in st.session_state.va_messages:
+                    with st.chat_message(msg["role"]):
+                        st.write(msg["content"])
+            st.text_input(
+                "Tanya sesuatu",
+                key="va_input_box",
+                placeholder="Tanya soal gizi atau data kamu...",
+                label_visibility="collapsed",
+                on_change=handle_va_send,
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('<div class="va-hint">Tekan Enter untuk mengirim</div>', unsafe_allow_html=True)
+        panel_col.float(
+            "position: fixed; bottom: 92px; right: 24px; z-index: 999994; "
+            "width: 340px; max-width: 90vw;"
+        )
+else:
+    st.sidebar.warning("💬 Fitur Asisten AI mengambang butuh library `streamlit-float`. Jalankan `pip install streamlit-float` lalu restart aplikasi.")
