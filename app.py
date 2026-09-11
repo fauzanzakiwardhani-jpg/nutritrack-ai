@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -9,9 +10,12 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 from google import genai
-from google.genai import types
 from PIL import Image
 from pydantic import BaseModel, Field
+
+# Model Gemini yang dipakai lewat Interactions API (client.interactions.create).
+# Ganti di sini jika Google merilis model lebih baru / model ini dideprecate lagi.
+GEMINI_MODEL = "gemini-3.6-flash"
 
 try:
     from fpdf import FPDF
@@ -825,15 +829,16 @@ if "Log & Rekomendasi" in menu_selection:
                         Setiap resep harus muat dalam sisa kuota kalori tersebut (tidak melebihi).
                         Sertakan alasan singkat kenapa menu tersebut cocok.
                         """
-                        response = client.models.generate_content(
-                            model='gemini-2.5-flash',
-                            contents=[recipe_prompt],
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json",
-                                response_schema=RecipeSuggestions,
-                            ),
+                        interaction = client.interactions.create(
+                            model=GEMINI_MODEL,
+                            input=recipe_prompt,
+                            response_format={
+                                "type": "text",
+                                "mime_type": "application/json",
+                                "schema": RecipeSuggestions.model_json_schema(),
+                            },
                         )
-                        parsed_recipes = RecipeSuggestions.model_validate_json(response.text)
+                        parsed_recipes = RecipeSuggestions.model_validate_json(interaction.output_text)
                         st.session_state["recipe_suggestions"] = parsed_recipes.recipes
                     except Exception as e:
                         st.error(f"Terjadi kesalahan saat mengambil rekomendasi: {e}")
@@ -932,16 +937,23 @@ elif "Input Makanan" in menu_selection:
                             try:
                                 prompt = f"Identifikasi makanan ini secara presisi dan berikan analisis nutrisi serta feedback singkat dalam Bahasa Indonesia untuk pengguna dengan target kesehatan: '{default_goal}'."
 
-                                response = client.models.generate_content(
-                                    model='gemini-2.5-flash',
-                                    contents=[image, prompt],
-                                    config=types.GenerateContentConfig(
-                                        response_mime_type="application/json",
-                                        response_schema=NutritionAnalysis,
-                                    ),
+                                image_bytes = uploaded_file.getvalue()
+                                image_mime = uploaded_file.type or "image/jpeg"
+
+                                interaction = client.interactions.create(
+                                    model=GEMINI_MODEL,
+                                    input=[
+                                        {"type": "text", "text": prompt},
+                                        {"type": "image", "data": base64.b64encode(image_bytes).decode('utf-8'), "mime_type": image_mime},
+                                    ],
+                                    response_format={
+                                        "type": "text",
+                                        "mime_type": "application/json",
+                                        "schema": NutritionAnalysis.model_json_schema(),
+                                    },
                                 )
 
-                                parsed_data = NutritionAnalysis.model_validate_json(response.text)
+                                parsed_data = NutritionAnalysis.model_validate_json(interaction.output_text)
 
                                 now_str = datetime.now().strftime('%Y%m%d_%H%M%S')
                                 file_path = os.path.join(UPLOAD_DIR, f"{now_str}_{uploaded_file.name}")
@@ -992,15 +1004,16 @@ elif "Input Makanan" in menu_selection:
                         target kesehatan: '{default_goal}'. Jika ada beberapa item makanan,
                         jumlahkan menjadi satu estimasi total.
                         """
-                        response = client.models.generate_content(
-                            model='gemini-2.5-flash',
-                            contents=[prompt],
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json",
-                                response_schema=NutritionAnalysis,
-                            ),
+                        interaction = client.interactions.create(
+                            model=GEMINI_MODEL,
+                            input=prompt,
+                            response_format={
+                                "type": "text",
+                                "mime_type": "application/json",
+                                "schema": NutritionAnalysis.model_json_schema(),
+                            },
                         )
-                        parsed_data = NutritionAnalysis.model_validate_json(response.text)
+                        parsed_data = NutritionAnalysis.model_validate_json(interaction.output_text)
                         current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
                         with sqlite3.connect(DB_NAME) as conn:
