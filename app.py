@@ -1070,7 +1070,7 @@ if "Log & Rekomendasi" in menu_selection:
 
     # SECTION REKOMENDASI AI
     st.markdown('<div class="section-label">Insight</div>', unsafe_allow_html=True)
-    st.markdown("### Rekomendasi & Evaluasi AI")
+    st.markdown("### Rekomendasi & Evaluasi")
     if total_cals == 0:
         st.markdown("""
         <div class="empty-state">
@@ -1102,7 +1102,7 @@ if "Log & Rekomendasi" in menu_selection:
 
     # ---------- AI RECIPE SUGGESTIONS ----------
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("#### 🍲 Rekomendasi Resep AI")
+    st.markdown("#### 🍲 Rekomendasi Resep")
     if sisa <= 0:
         st.caption("Sisa kuota kalori sudah habis/negatif — rekomendasi resep tersedia setelah ada sisa kuota.")
     else:
@@ -1182,7 +1182,7 @@ if "Log & Rekomendasi" in menu_selection:
                         st.image(img_path, width=160)
 
                 with col_b:
-                    if st.button("🗑️ Hapus Log", key=f"del_{log_id}", type="secondary"):
+                    if st.button("Hapus Log", key=f"del_{log_id}", type="secondary"):
                         with sqlite3.connect(DB_NAME) as conn:
                             cursor = conn.cursor()
                             cursor.execute("DELETE FROM daily_logs WHERE id = ? AND user_id = ?", (log_id, active_user_id))
@@ -1210,13 +1210,13 @@ elif "Input Makanan" in menu_selection:
     st.markdown("### Catat Makanan Kamu")
     input_type = st.radio(
         "Pilih Metode Logging:",
-        ["Scan Foto Makanan (AI Vision)", "Ketik Teks (AI Text)", "Input Manual"],
+        ["Ambil Foto", "Ketik Singkat", "Isi Manual"],
         horizontal=True
     )
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    if input_type == "Scan Foto Makanan (AI Vision)":
+    if input_type == "Ambil Foto":
         uploaded_file = st.file_uploader("Unggah foto hidangan kamu di sini", type=["jpg", "jpeg", "png"])
 
         if uploaded_file:
@@ -1284,7 +1284,7 @@ elif "Input Makanan" in menu_selection:
                             except Exception as e:
                                 st.error(f"Terjadi kesalahan analisis: {e}")
 
-    elif input_type == "Ketik Teks (AI Text)":
+    elif input_type == "Ketik Singkat":
         st.info("Ketik apa yang kamu makan secara bebas, contoh: *\"Makan soto ayam 1 porsi sama nasi putih setengah\"*. AI akan mengestimasi kalori dan makronutrisinya.")
         text_input = st.text_area("Deskripsikan makanan kamu:", placeholder="Contoh: Nasi goreng seporsi + telur ceplok + es teh manis", height=100)
 
