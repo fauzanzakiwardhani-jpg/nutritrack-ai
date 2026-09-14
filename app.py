@@ -1,7 +1,9 @@
 import base64
+import hashlib
 import io
 import json
 import os
+import secrets
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -51,6 +53,14 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 WATER_QUICK_OPTIONS = [200, 300, 500]
+
+ACTIVITY_OPTIONS = [
+    'Sedentari (Jarang olahraga)',
+    'Ringan (1-3 hari/minggu)',
+    'Sedang (3-5 hari/minggu)',
+    'Berat (6-7 hari/minggu)'
+]
+GOAL_OPTIONS = ['Turunkan Berat Badan', 'Jaga Berat Badan', 'Naikkan Berat Badan']
 
 
 # ----------------------------------------------------
@@ -397,6 +407,54 @@ CUSTOM_CSS = """
         overflow: hidden;
     }
 
+    /* ---------- AUTH (LOGIN/REGISTER) ---------- */
+    .auth-card {
+        background: white;
+        border-radius: 22px;
+        border: 1px solid #eef2f1;
+        box-shadow: 0 20px 40px -14px rgba(15, 23, 42, 0.15);
+        padding: 2.2rem 2.4rem;
+        margin-top: 0.5rem;
+    }
+    .auth-title {
+        font-weight: 800;
+        font-size: 1.3rem;
+        color: #0f172a;
+        margin-bottom: 0.2rem;
+    }
+    .auth-subtitle {
+        font-size: 0.9rem;
+        color: #64748b;
+        margin-bottom: 1.2rem;
+    }
+
+    /* ---------- SIDEBAR USER BADGE ---------- */
+    .user-badge {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        background: #f8fafc;
+        border-radius: 14px;
+        border: 1px solid #eef2f1;
+        margin-bottom: 10px;
+    }
+    .user-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #10b981, #059669);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 800;
+        font-size: 1.05rem;
+        flex-shrink: 0;
+    }
+    .user-name { font-weight: 700; font-size: 0.92rem; color: #0f172a; line-height: 1.2; }
+    .user-username { font-size: 0.78rem; color: #64748b; }
+
     /* ---------- VIRTUAL ASSISTANT (FLOATING CHAT) ---------- */
     .st-key-va_toggle_btn button {
         width: 58px !important;
@@ -472,7 +530,28 @@ class RecipeSuggestions(BaseModel):
 
 
 # ----------------------------------------------------
-# 4. DATABASE INITIALIZATION
+# 4. PASSWORD HASHING (stdlib only — hashlib.pbkdf2_hmac + salt acak)
+# ----------------------------------------------------
+PBKDF2_ITERATIONS = 200_000
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    pwd_hash = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), bytes.fromhex(salt), PBKDF2_ITERATIONS)
+    return f"{salt}:{pwd_hash.hex()}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        salt, hash_hex = stored_hash.split(":")
+    except (ValueError, AttributeError, TypeError):
+        return False
+    pwd_hash = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), bytes.fromhex(salt), PBKDF2_ITERATIONS)
+    return secrets.compare_digest(pwd_hash.hex(), hash_hex)
+
+
+# ----------------------------------------------------
+# 5. DATABASE INITIALIZATION
 # ----------------------------------------------------
 def ensure_column(cursor, table, column, col_type_with_default):
     cursor.execute(f"PRAGMA table_info({table})")
@@ -487,6 +566,9 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT,
+                email TEXT,
+                password_hash TEXT,
                 name TEXT NOT NULL,
                 age INTEGER,
                 gender TEXT,
@@ -494,7 +576,13 @@ def init_db():
                 weight_kg REAL,
                 activity_level TEXT,
                 goal TEXT,
-                target_calories REAL
+                target_calories REAL,
+                target_protein_g REAL,
+                target_carbs_g REAL,
+                target_fat_g REAL,
+                custom_macro_mode INTEGER DEFAULT 0,
+                target_water_ml REAL DEFAULT 2000,
+                created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
             )
         ''')
         cursor.execute('''
@@ -524,26 +612,28 @@ def init_db():
             )
         ''')
 
-        # Migrasi kolom baru untuk target makro kustom & target air
+        # Migrasi kolom baru untuk instalasi lama (aman dijalankan berkali-kali)
+        ensure_column(cursor, "users", "username", "TEXT")
+        ensure_column(cursor, "users", "email", "TEXT")
+        ensure_column(cursor, "users", "password_hash", "TEXT")
         ensure_column(cursor, "users", "target_protein_g", "REAL")
         ensure_column(cursor, "users", "target_carbs_g", "REAL")
         ensure_column(cursor, "users", "target_fat_g", "REAL")
         ensure_column(cursor, "users", "custom_macro_mode", "INTEGER DEFAULT 0")
         ensure_column(cursor, "users", "target_water_ml", "REAL DEFAULT 2000")
+        ensure_column(cursor, "users", "created_at", "TIMESTAMP DEFAULT (datetime('now','localtime'))")
 
-        cursor.execute("SELECT COUNT(*) FROM users")
-        if cursor.fetchone()[0] == 0:
-            cursor.execute('''
-                INSERT INTO users (name, age, gender, height_cm, weight_kg, activity_level, goal, target_calories, target_water_ml)
-                VALUES ('Pengguna', 22, 'Laki-laki', 170.0, 65.0, 'Sedentari (Jarang olahraga)', 'Turunkan Berat Badan', 1800, 2000)
-            ''')
+        # Index unik untuk username & email (NULL boleh berulang di SQLite, jadi aman untuk data lama)
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+
         conn.commit()
 
 init_db()
 
 
 # ----------------------------------------------------
-# 5. CALCULATOR HELPERS
+# 6. CALCULATOR & AUTH HELPERS
 # ----------------------------------------------------
 def calculate_target(weight_kg, height_cm, age, gender, activity_level, goal):
     if gender == 'Laki-laki':
@@ -574,8 +664,46 @@ def default_macro_split(target_calories):
     return protein_g, carbs_g, fat_g
 
 
+def get_user_by_id(user_id):
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def get_user_by_identifier(identifier):
+    """Cari user berdasarkan username ATAU email (untuk login)."""
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE username = ? OR email = ?", (identifier, identifier))
+        row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def create_user(username, email, password, name, age, gender, height_cm, weight_kg, activity_level, goal):
+    """Buat akun baru. Melempar sqlite3.IntegrityError jika username/email sudah dipakai."""
+    target_cal = calculate_target(weight_kg, height_cm, age, gender, activity_level, goal)
+    auto_p, auto_c, auto_f = default_macro_split(target_cal)
+    pwd_hash = hash_password(password)
+
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO users (username, email, password_hash, name, age, gender, height_cm, weight_kg,
+                                activity_level, goal, target_calories, target_protein_g, target_carbs_g,
+                                target_fat_g, custom_macro_mode, target_water_ml)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 2000)
+        ''', (username, email, pwd_hash, name, age, gender, height_cm, weight_kg, activity_level, goal,
+              target_cal, auto_p, auto_c, auto_f))
+        conn.commit()
+        return cursor.lastrowid
+
+
 # ----------------------------------------------------
-# 6. HEADER BANNER
+# 7. HEADER BANNER (selalu tampil, termasuk di halaman login)
 # ----------------------------------------------------
 st.markdown("""
 <div class="app-header">
@@ -586,9 +714,133 @@ st.markdown("""
 
 
 # ----------------------------------------------------
-# 7. SIDEBAR NAVIGATION & PROFILE MANAGEMENT
+# 8. AUTH GATE — LOGIN & REGISTRASI
+# ----------------------------------------------------
+if "logged_in_user_id" not in st.session_state:
+    st.session_state.logged_in_user_id = None
+
+if st.session_state.logged_in_user_id is None:
+    col_a, col_b, col_c = st.columns([1, 1.4, 1])
+    with col_b:
+        st.markdown('<div class="auth-card">', unsafe_allow_html=True)
+        tab_login, tab_register = st.tabs(["🔑 Login", "📝 Daftar Akun"])
+
+        with tab_login:
+            st.markdown('<div class="auth-title">Selamat Datang Kembali</div>', unsafe_allow_html=True)
+            st.markdown('<div class="auth-subtitle">Masuk untuk melanjutkan pelacakan gizi kamu.</div>', unsafe_allow_html=True)
+            with st.form("login_form"):
+                login_id = st.text_input("Username atau Email")
+                login_pw = st.text_input("Password", type="password")
+                login_submit = st.form_submit_button("Masuk", type="primary", use_container_width=True)
+
+                if login_submit:
+                    if not login_id.strip() or not login_pw:
+                        st.error("Username/email dan password wajib diisi.")
+                    else:
+                        user = get_user_by_identifier(login_id.strip())
+                        if user and verify_password(login_pw, user.get("password_hash")):
+                            st.session_state.logged_in_user_id = user["id"]
+                            st.rerun()
+                        else:
+                            st.error("Username/email atau password salah.")
+
+        with tab_register:
+            st.markdown('<div class="auth-title">Buat Akun Baru</div>', unsafe_allow_html=True)
+            st.markdown('<div class="auth-subtitle">Isi data diri untuk menghitung target kalori otomatis.</div>', unsafe_allow_html=True)
+            with st.form("register_form"):
+                r_name = st.text_input("Nama Lengkap")
+                rc1, rc2 = st.columns(2)
+                with rc1:
+                    r_username = st.text_input("Username")
+                with rc2:
+                    r_email = st.text_input("Email")
+
+                rc3, rc4 = st.columns(2)
+                with rc3:
+                    r_password = st.text_input("Password", type="password")
+                with rc4:
+                    r_password_confirm = st.text_input("Konfirmasi Password", type="password")
+
+                rc5, rc6 = st.columns(2)
+                with rc5:
+                    r_age = st.number_input("Usia (tahun)", 10, 100, 22)
+                    r_height = st.number_input("Tinggi Badan (cm)", 100.0, 250.0, 165.0)
+                    r_activity = st.selectbox("Tingkat Aktivitas", ACTIVITY_OPTIONS)
+                with rc6:
+                    r_gender = st.selectbox("Jenis Kelamin", ["Laki-laki", "Perempuan"])
+                    r_weight = st.number_input("Berat Badan (kg)", 30.0, 200.0, 60.0)
+                    r_goal = st.selectbox("Target Kesehatan", GOAL_OPTIONS)
+
+                register_submit = st.form_submit_button("Daftar", type="primary", use_container_width=True)
+
+                if register_submit:
+                    errors = []
+                    if not r_name.strip():
+                        errors.append("Nama tidak boleh kosong.")
+                    if not r_username.strip():
+                        errors.append("Username tidak boleh kosong.")
+                    if not r_email.strip() or "@" not in r_email:
+                        errors.append("Email tidak valid.")
+                    if len(r_password) < 6:
+                        errors.append("Password minimal 6 karakter.")
+                    if r_password != r_password_confirm:
+                        errors.append("Konfirmasi password tidak cocok.")
+
+                    if errors:
+                        for e in errors:
+                            st.error(e)
+                    else:
+                        try:
+                            new_id = create_user(
+                                r_username.strip(), r_email.strip(), r_password, r_name.strip(),
+                                r_age, r_gender, r_height, r_weight, r_activity, r_goal
+                            )
+                            st.session_state.logged_in_user_id = new_id
+                            st.success("Akun berhasil dibuat! Selamat datang di NutriTrack AI 🎉")
+                            st.rerun()
+                        except sqlite3.IntegrityError:
+                            st.error("Username atau email sudah terdaftar. Coba yang lain.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.stop()  # Hentikan render lebih lanjut — sidebar & fitur utama hanya untuk yang sudah login
+
+
+# ----------------------------------------------------
+# 9. AMBIL DATA USER YANG SEDANG LOGIN
+# ----------------------------------------------------
+active_user = get_user_by_id(st.session_state.logged_in_user_id)
+
+if active_user is None:
+    # Akun tidak ditemukan (edge case) — paksa logout
+    st.session_state.logged_in_user_id = None
+    st.rerun()
+
+active_user_id = active_user["id"]
+default_goal = active_user["goal"] or "Jaga Berat Badan"
+
+
+# ----------------------------------------------------
+# 10. SIDEBAR NAVIGATION & PROFILE MANAGEMENT
 # ----------------------------------------------------
 with st.sidebar:
+    initial_letter = (active_user["name"] or "?").strip()[:1].upper()
+    st.markdown(f"""
+    <div class="user-badge">
+        <div class="user-avatar">{initial_letter}</div>
+        <div>
+            <div class="user-name">{active_user['name']}</div>
+            <div class="user-username">@{active_user['username'] or '-'}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if st.button("🚪 Logout", use_container_width=True):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+
+    st.divider()
     st.markdown("""
     <div class="nav-heading">
         <span class="text">Menu</span>
@@ -602,110 +854,88 @@ with st.sidebar:
         index=0,
         label_visibility="collapsed"
     )
-    # Tidak bergantung pada emoji/ikon di depan teks — aman dipakai/dihapus kapan saja
     menu_selection = menu_raw
 
     st.divider()
     st.markdown("### 👤 Profil")
 
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, name, age, gender, height_cm, weight_kg, activity_level, goal,
-                   target_calories, target_protein_g, target_carbs_g, target_fat_g,
-                   custom_macro_mode, target_water_ml
-            FROM users ORDER BY id DESC LIMIT 1
-        """)
-        latest_user = cursor.fetchone()
+    name = st.text_input("Nama Pengguna", active_user["name"])
+    age = st.number_input("Usia (tahun)", 10, 100, int(active_user["age"] or 22))
+    gender = st.selectbox("Jenis Kelamin", ["Laki-laki", "Perempuan"], index=0 if active_user["gender"] == "Laki-laki" else 1)
+    height = st.number_input("Tinggi Badan (cm)", 100.0, 250.0, float(active_user["height_cm"] or 170.0))
+    weight = st.number_input("Berat Badan (kg)", 30.0, 200.0, float(active_user["weight_kg"] or 65.0))
 
-    active_user_id = latest_user[0] if latest_user else 1
-    default_name = latest_user[1] if latest_user else "Pengguna"
-    default_age = latest_user[2] if latest_user else 22
-    default_gender = latest_user[3] if latest_user else "Laki-laki"
-    default_height = latest_user[4] if latest_user else 170.0
-    default_weight = latest_user[5] if latest_user else 65.0
-    default_activity = latest_user[6] if latest_user else 'Sedentari (Jarang olahraga)'
-    default_goal = latest_user[7] if latest_user else 'Turunkan Berat Badan'
-    default_target_calories = latest_user[8] if latest_user and latest_user[8] else 1800
-    saved_protein = latest_user[9] if latest_user else None
-    saved_carbs = latest_user[10] if latest_user else None
-    saved_fat = latest_user[11] if latest_user else None
-    saved_custom_mode = bool(latest_user[12]) if latest_user and latest_user[12] is not None else False
-    default_water_target = latest_user[13] if latest_user and latest_user[13] else 2000
-
-    name = st.text_input("Nama Pengguna", default_name)
-    age = st.number_input("Usia (tahun)", 10, 100, int(default_age))
-    gender = st.selectbox("Jenis Kelamin", ["Laki-laki", "Perempuan"], index=0 if default_gender == "Laki-laki" else 1)
-    height = st.number_input("Tinggi Badan (cm)", 100.0, 250.0, float(default_height))
-    weight = st.number_input("Berat Badan (kg)", 30.0, 200.0, float(default_weight))
-
-    activity_options = [
-        'Sedentari (Jarang olahraga)',
-        'Ringan (1-3 hari/minggu)',
-        'Sedang (3-5 hari/minggu)',
-        'Berat (6-7 hari/minggu)'
-    ]
-    activity = st.selectbox("Aktivitas Harian", activity_options, index=activity_options.index(default_activity) if default_activity in activity_options else 0)
-
-    goal_options = ['Turunkan Berat Badan', 'Jaga Berat Badan', 'Naikkan Berat Badan']
-    goal = st.selectbox("Target Kesehatan", goal_options, index=goal_options.index(default_goal) if default_goal in goal_options else 0)
+    activity = st.selectbox(
+        "Aktivitas Harian", ACTIVITY_OPTIONS,
+        index=ACTIVITY_OPTIONS.index(active_user["activity_level"]) if active_user["activity_level"] in ACTIVITY_OPTIONS else 0
+    )
+    goal = st.selectbox(
+        "Target Kesehatan", GOAL_OPTIONS,
+        index=GOAL_OPTIONS.index(active_user["goal"]) if active_user["goal"] in GOAL_OPTIONS else 0
+    )
 
     st.divider()
     st.markdown("### 🎯 Target Makronutrisi")
-    custom_macro_mode = st.checkbox("Gunakan target makro kustom (Keto / Bulking / Low Carb, dll)", value=saved_custom_mode)
+    custom_macro_mode = st.checkbox(
+        "Gunakan target makro kustom (Keto / Bulking / Low Carb, dll)",
+        value=bool(active_user["custom_macro_mode"])
+    )
 
-    auto_p, auto_c, auto_f = default_macro_split(default_target_calories)
+    current_target_calories = active_user["target_calories"] or 1800
+    auto_p, auto_c, auto_f = default_macro_split(current_target_calories)
+
     if custom_macro_mode:
-        target_protein_g = st.number_input("Target Protein (g)", 0.0, 400.0, float(saved_protein) if saved_protein else float(auto_p))
-        target_carbs_g = st.number_input("Target Karbohidrat (g)", 0.0, 600.0, float(saved_carbs) if saved_carbs else float(auto_c))
-        target_fat_g = st.number_input("Target Lemak (g)", 0.0, 300.0, float(saved_fat) if saved_fat else float(auto_f))
+        target_protein_g = st.number_input("Target Protein (g)", 0.0, 400.0, float(active_user["target_protein_g"] or auto_p))
+        target_carbs_g = st.number_input("Target Karbohidrat (g)", 0.0, 600.0, float(active_user["target_carbs_g"] or auto_c))
+        target_fat_g = st.number_input("Target Lemak (g)", 0.0, 300.0, float(active_user["target_fat_g"] or auto_f))
     else:
         target_protein_g, target_carbs_g, target_fat_g = auto_p, auto_c, auto_f
         st.caption(f"Otomatis dari target kalori: Protein {auto_p}g · Karbo {auto_c}g · Lemak {auto_f}g")
 
     st.divider()
     st.markdown("### 💧 Target Hidrasi")
-    target_water_ml = st.number_input("Target Air Harian (ml)", 500, 5000, int(default_water_target), step=100)
+    target_water_ml = st.number_input("Target Air Harian (ml)", 500, 5000, int(active_user["target_water_ml"] or 2000), step=100)
 
     if st.button("Simpan & Hitung Ulang", use_container_width=True, type="primary"):
         target_cal = calculate_target(weight, height, age, gender, activity, goal)
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO users (name, age, gender, height_cm, weight_kg, activity_level, goal,
-                                    target_calories, target_protein_g, target_carbs_g, target_fat_g,
-                                    custom_macro_mode, target_water_ml)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                UPDATE users SET
+                    name = ?, age = ?, gender = ?, height_cm = ?, weight_kg = ?,
+                    activity_level = ?, goal = ?, target_calories = ?,
+                    target_protein_g = ?, target_carbs_g = ?, target_fat_g = ?,
+                    custom_macro_mode = ?, target_water_ml = ?
+                WHERE id = ?
             ''', (name, age, gender, height, weight, activity, goal, target_cal,
                   target_protein_g, target_carbs_g, target_fat_g,
-                  1 if custom_macro_mode else 0, target_water_ml))
+                  1 if custom_macro_mode else 0, target_water_ml, active_user_id))
             conn.commit()
-        st.success(f"Target baru: {target_cal} kcal/hari")
+        st.success(f"Profil diperbarui! Target baru: {target_cal} kcal/hari")
         st.rerun()
 
     st.divider()
     st.markdown("Pengaturan Data")
-    if st.button("Reset Semua Data", type="secondary", use_container_width=True):
+    if st.button("Reset Riwayat Saya", type="secondary", use_container_width=True):
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM daily_logs")
-            cursor.execute("DELETE FROM water_logs")
-            cursor.execute("DELETE FROM users")
+            cursor.execute("SELECT image_path FROM daily_logs WHERE user_id = ? AND image_path IS NOT NULL", (active_user_id,))
+            image_paths = [r[0] for r in cursor.fetchall()]
+            cursor.execute("DELETE FROM daily_logs WHERE user_id = ?", (active_user_id,))
+            cursor.execute("DELETE FROM water_logs WHERE user_id = ?", (active_user_id,))
             conn.commit()
 
-        if os.path.exists(UPLOAD_DIR):
-            for file in os.listdir(UPLOAD_DIR):
-                file_path = os.path.join(UPLOAD_DIR, file)
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
+        for p in image_paths:
+            if p and os.path.exists(p):
+                os.remove(p)
 
-        init_db()
-        st.toast("Data berhasil dibersihkan!", icon="🧹")
+        st.toast("Riwayat log & hidrasi kamu berhasil dibersihkan!", icon="🧹")
         st.rerun()
+    st.caption("Hanya menghapus riwayat makanan & air kamu. Akun & profil tetap tersimpan.")
 
 
 # ----------------------------------------------------
-# 8. MAIN CONTENT ROUTING
+# 11. MAIN CONTENT ROUTING
 # ----------------------------------------------------
 
 # ====================================================
@@ -715,7 +945,10 @@ if "Log & Rekomendasi" in menu_selection:
     today_str = datetime.now().strftime('%Y-%m-%d')
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT SUM(calories), SUM(protein_g), SUM(carbs_g), SUM(fat_g) FROM daily_logs WHERE DATE(logged_at) = ?", (today_str,))
+        cursor.execute(
+            "SELECT SUM(calories), SUM(protein_g), SUM(carbs_g), SUM(fat_g) FROM daily_logs WHERE user_id = ? AND DATE(logged_at) = ?",
+            (active_user_id, today_str)
+        )
         totals = cursor.fetchone()
 
         cursor.execute("""
@@ -724,7 +957,11 @@ if "Log & Rekomendasi" in menu_selection:
         """, (active_user_id,))
         user_target_row = cursor.fetchone()
 
-        cursor.execute("SELECT id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, input_method, logged_at, image_path FROM daily_logs WHERE DATE(logged_at) = ? ORDER BY id DESC", (today_str,))
+        cursor.execute(
+            "SELECT id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, input_method, logged_at, image_path "
+            "FROM daily_logs WHERE user_id = ? AND DATE(logged_at) = ? ORDER BY id DESC",
+            (active_user_id, today_str)
+        )
         logs = cursor.fetchall()
 
     total_cals = totals[0] if totals and totals[0] else 0.0
@@ -936,7 +1173,7 @@ if "Log & Rekomendasi" in menu_selection:
                     if st.button("🗑️ Hapus Log", key=f"del_{log_id}", type="secondary"):
                         with sqlite3.connect(DB_NAME) as conn:
                             cursor = conn.cursor()
-                            cursor.execute("DELETE FROM daily_logs WHERE id = ?", (log_id,))
+                            cursor.execute("DELETE FROM daily_logs WHERE id = ? AND user_id = ?", (log_id, active_user_id))
                             conn.commit()
 
                         if img_path and os.path.exists(img_path):
@@ -1125,9 +1362,15 @@ elif "Hidrasi" in menu_selection:
 
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT SUM(amount_ml) FROM water_logs WHERE DATE(logged_at) = ?", (today_str,))
+        cursor.execute(
+            "SELECT SUM(amount_ml) FROM water_logs WHERE user_id = ? AND DATE(logged_at) = ?",
+            (active_user_id, today_str)
+        )
         water_total_row = cursor.fetchone()
-        cursor.execute("SELECT id, amount_ml, logged_at FROM water_logs WHERE DATE(logged_at) = ? ORDER BY id DESC", (today_str,))
+        cursor.execute(
+            "SELECT id, amount_ml, logged_at FROM water_logs WHERE user_id = ? AND DATE(logged_at) = ? ORDER BY id DESC",
+            (active_user_id, today_str)
+        )
         water_logs = cursor.fetchall()
 
     total_water = water_total_row[0] if water_total_row and water_total_row[0] else 0.0
@@ -1211,7 +1454,7 @@ elif "Hidrasi" in menu_selection:
                 if st.button("Hapus", key=f"del_water_{w_id}"):
                     with sqlite3.connect(DB_NAME) as conn:
                         cursor = conn.cursor()
-                        cursor.execute("DELETE FROM water_logs WHERE id = ?", (w_id,))
+                        cursor.execute("DELETE FROM water_logs WHERE id = ? AND user_id = ?", (w_id, active_user_id))
                         conn.commit()
                     st.rerun()
     else:
@@ -1234,11 +1477,11 @@ elif "Analytics & Trend" in menu_selection:
         query = """
             SELECT DATE(logged_at) as log_date, SUM(calories) as total_calories
             FROM daily_logs
-            WHERE DATE(logged_at) >= DATE('now', '-7 days', 'localtime')
+            WHERE user_id = ? AND DATE(logged_at) >= DATE('now', '-7 days', 'localtime')
             GROUP BY DATE(logged_at)
             ORDER BY log_date ASC
         """
-        df = pd.read_sql_query(query, conn)
+        df = pd.read_sql_query(query, conn, params=(active_user_id,))
 
         cursor = conn.cursor()
         cursor.execute("SELECT target_calories FROM users WHERE id = ?", (active_user_id,))
@@ -1367,11 +1610,11 @@ elif "Analytics & Trend" in menu_selection:
         water_query = """
             SELECT DATE(logged_at) as log_date, SUM(amount_ml) as total_ml
             FROM water_logs
-            WHERE DATE(logged_at) >= DATE('now', '-7 days', 'localtime')
+            WHERE user_id = ? AND DATE(logged_at) >= DATE('now', '-7 days', 'localtime')
             GROUP BY DATE(logged_at)
             ORDER BY log_date ASC
         """
-        df_water = pd.read_sql_query(water_query, conn)
+        df_water = pd.read_sql_query(water_query, conn, params=(active_user_id,))
 
     if not df_water.empty:
         df_water['log_date'] = pd.to_datetime(df_water['log_date'])
@@ -1414,11 +1657,11 @@ elif "Export Data" in menu_selection:
     period_option = st.selectbox("Pilih Periode", ["7 Hari Terakhir", "30 Hari Terakhir", "Semua Data"])
 
     if period_option == "7 Hari Terakhir":
-        date_filter = "WHERE DATE(logged_at) >= DATE('now', '-7 days', 'localtime')"
+        date_clause = "AND DATE(logged_at) >= DATE('now', '-7 days', 'localtime')"
     elif period_option == "30 Hari Terakhir":
-        date_filter = "WHERE DATE(logged_at) >= DATE('now', '-30 days', 'localtime')"
+        date_clause = "AND DATE(logged_at) >= DATE('now', '-30 days', 'localtime')"
     else:
-        date_filter = ""
+        date_clause = ""
 
     with sqlite3.connect(DB_NAME) as conn:
         export_query = f"""
@@ -1434,10 +1677,10 @@ elif "Export Data" in menu_selection:
                 input_method as "Metode Input",
                 ai_feedback as "Catatan AI"
             FROM daily_logs
-            {date_filter}
+            WHERE user_id = ? {date_clause}
             ORDER BY logged_at DESC
         """
-        export_df = pd.read_sql_query(export_query, conn)
+        export_df = pd.read_sql_query(export_query, conn, params=(active_user_id,))
 
     if export_df.empty:
         st.markdown("""
@@ -1483,7 +1726,7 @@ elif "Export Data" in menu_selection:
                 pdf.set_font("Helvetica", "B", 14)
                 pdf.cell(0, 10, "NutriTrack AI - Riwayat Konsumsi Makanan", ln=True)
                 pdf.set_font("Helvetica", "", 9)
-                pdf.cell(0, 6, f"Periode: {period_option} | Dibuat: {datetime.now().strftime('%d %B %Y %H:%M')}", ln=True)
+                pdf.cell(0, 6, f"Pengguna: {active_user['name']} | Periode: {period_option} | Dibuat: {datetime.now().strftime('%d %B %Y %H:%M')}", ln=True)
                 pdf.ln(3)
 
                 col_widths = [22, 18, 45, 18, 20, 18, 22, 18, 22, 60]
@@ -1513,20 +1756,32 @@ elif "Export Data" in menu_selection:
 
 
 # ====================================================
-# 9. VIRTUAL ASSISTANT (FLOATING CHAT — MUNCUL DI SEMUA HALAMAN)
+# 12. VIRTUAL ASSISTANT (FLOATING CHAT — MUNCUL DI SEMUA HALAMAN)
 # ====================================================
 def get_va_context():
-    """Ambil ringkasan data gizi & hidrasi hari ini untuk konteks jawaban asisten AI."""
+    """Ambil ringkasan data gizi & hidrasi hari ini (khusus user yang login) untuk konteks jawaban asisten AI."""
     today_str = datetime.now().strftime('%Y-%m-%d')
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT SUM(calories), SUM(protein_g), SUM(carbs_g), SUM(fat_g) FROM daily_logs WHERE DATE(logged_at) = ?", (today_str,))
+        cursor.execute(
+            "SELECT SUM(calories), SUM(protein_g), SUM(carbs_g), SUM(fat_g) FROM daily_logs WHERE user_id = ? AND DATE(logged_at) = ?",
+            (active_user_id, today_str)
+        )
         totals = cursor.fetchone()
-        cursor.execute("SELECT target_calories, target_protein_g, target_carbs_g, target_fat_g FROM users WHERE id = ?", (active_user_id,))
+        cursor.execute(
+            "SELECT target_calories, target_protein_g, target_carbs_g, target_fat_g FROM users WHERE id = ?",
+            (active_user_id,)
+        )
         targets_row = cursor.fetchone()
-        cursor.execute("SELECT SUM(amount_ml) FROM water_logs WHERE DATE(logged_at) = ?", (today_str,))
+        cursor.execute(
+            "SELECT SUM(amount_ml) FROM water_logs WHERE user_id = ? AND DATE(logged_at) = ?",
+            (active_user_id, today_str)
+        )
         water_row = cursor.fetchone()
-        cursor.execute("SELECT food_name, calories FROM daily_logs WHERE DATE(logged_at) = ? ORDER BY id DESC LIMIT 5", (today_str,))
+        cursor.execute(
+            "SELECT food_name, calories FROM daily_logs WHERE user_id = ? AND DATE(logged_at) = ? ORDER BY id DESC LIMIT 5",
+            (active_user_id, today_str)
+        )
         recent_foods = cursor.fetchall()
 
     cal_total = totals[0] if totals and totals[0] else 0.0
@@ -1542,6 +1797,7 @@ def get_va_context():
     food_list = ", ".join([f"{f[0]} ({f[1]:.0f} kcal)" for f in recent_foods]) if recent_foods else "belum ada makanan dicatat hari ini"
 
     return f"""
+    Nama pengguna: {active_user['name']}
     Data gizi & hidrasi pengguna HARI INI (gunakan ini untuk menjawab pertanyaan personal, jangan tampilkan mentah-mentah kecuali diminta):
     - Kalori: {cal_total:.0f} dari target {cal_target:.0f} kcal (sisa {cal_target - cal_total:.0f} kcal)
     - Protein: {p_total:.1f}g dari target {p_target:.0f}g
@@ -1595,7 +1851,7 @@ if "va_open" not in st.session_state:
     st.session_state.va_open = False
 if "va_messages" not in st.session_state:
     st.session_state.va_messages = [
-        {"role": "assistant", "content": "Halo! 👋 Saya Nutri, asisten gizi kamu. Tanya apa saja soal makanan, atau soal sisa kuota kalori & makro kamu hari ini."}
+        {"role": "assistant", "content": f"Halo {active_user['name']}! 👋 Saya Nutri, asisten gizi kamu. Tanya apa saja soal makanan, atau soal sisa kuota kalori & makro kamu hari ini."}
     ]
 if "va_last_interaction_id" not in st.session_state:
     st.session_state.va_last_interaction_id = None
