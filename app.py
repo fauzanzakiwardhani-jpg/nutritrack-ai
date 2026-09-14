@@ -1227,8 +1227,8 @@ elif "Input Makanan" in menu_selection:
                 st.image(image, caption="Foto yang Diunggah", use_container_width=True)
 
             with col_info:
-                st.info("Pindai gambar dengan Gemini AI Vision untuk menghitung estimasi kalori dan makronutrisi secara otomatis.")
-                if st.button("✨ Analisis Nutrisi dengan AI", type="primary", use_container_width=True):
+                st.info("Pindai untuk menghitung estimasi kalori dan makronutrisi secara otomatis.")
+                if st.button("Input", type="primary", use_container_width=True):
                     if not api_key:
                         st.error("API Key belum terkonfigurasi!")
                     else:
@@ -1279,7 +1279,6 @@ elif "Input Makanan" in menu_selection:
                                     ))
                                     conn.commit()
 
-                                st.balloons()
                                 st.success(f"Berhasil mencatat: **{parsed_data.food_name}** ({parsed_data.calories} kcal)")
                             except Exception as e:
                                 st.error(f"Terjadi kesalahan analisis: {e}")
@@ -1288,7 +1287,7 @@ elif "Input Makanan" in menu_selection:
         st.info("Ketik apa yang kamu makan secara bebas, contoh: *\"Makan soto ayam 1 porsi sama nasi putih setengah\"*. AI akan mengestimasi kalori dan makronutrisinya.")
         text_input = st.text_area("Deskripsikan makanan kamu:", placeholder="Contoh: Nasi goreng seporsi + telur ceplok + es teh manis", height=100)
 
-        if st.button("✨ Analisis Teks dengan AI", type="primary", use_container_width=True):
+        if st.button("Input", type="primary", use_container_width=True):
             if not api_key:
                 st.error("API Key belum terkonfigurasi!")
             elif not text_input.strip():
@@ -1333,7 +1332,6 @@ elif "Input Makanan" in menu_selection:
                             ))
                             conn.commit()
 
-                        st.balloons()
                         st.success(f"Berhasil mencatat: **{parsed_data.food_name}** ({parsed_data.calories} kcal)")
                     except Exception as e:
                         st.error(f"Terjadi kesalahan analisis: {e}")
