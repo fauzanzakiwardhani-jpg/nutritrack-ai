@@ -508,8 +508,11 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # ----------------------------------------------------
 class NutritionAnalysis(BaseModel):
     food_name: str = Field(description="Nama makanan dalam Bahasa Indonesia")
-    estimated_weight_g: float = Field(description="Estimasi berat porsi dalam gram")
-    calories: float = Field(description="Total kalori dalam kcal")
+    estimated_weight_min_g: float = Field(description="Batas bawah estimasi berat porsi dalam gram, berdasarkan analisis kalibrasi visual")
+    estimated_weight_max_g: float = Field(description="Batas atas estimasi berat porsi dalam gram, berdasarkan analisis kalibrasi visual")
+    estimated_weight_g: float = Field(description="Berat porsi terpilih (nilai tengah terkuat) dalam gram — dasar perhitungan kalori & makro")
+    confidence_score: int = Field(description="Skor keyakinan estimasi 1-100, berdasarkan kejelasan foto, pencahayaan, dan keterlihatan komponen makanan")
+    calories: float = Field(description="Total kalori dalam kcal, dihitung dari berat_terpilih_gram")
     protein_g: float = Field(description="Kandungan protein dalam gram")
     carbs_g: float = Field(description="Kandungan karbohidrat dalam gram")
     fat_g: float = Field(description="Kandungan lemak dalam gram")
@@ -527,6 +530,47 @@ class RecipeIdea(BaseModel):
 
 class RecipeSuggestions(BaseModel):
     recipes: list[RecipeIdea] = Field(description="Daftar 3 ide resep/menu makanan sehat")
+
+
+# ----------------------------------------------------
+# 3b. SYSTEM PROMPT — ANALISIS FOTO MAKANAN (CHAIN-OF-THOUGHT)
+# ----------------------------------------------------
+FOOD_VISION_SYSTEM_PROMPT = """
+Kamu adalah pakar nutrisi AI dan spesialis Computer Vision khusus analisis makanan khas Indonesia dan internasional.
+
+Tugas utama kamu adalah menganalisis foto makanan yang diunggah pengguna, mendeteksi semua komponen bahan, mengestimasi berat (gram) secara rasional, dan menghitung total kandungan makronutrisinya.
+
+---
+
+### TAHAPAN ANALISIS (CHAIN-OF-THOUGHT):
+Lakukan penalaran secara berurutan sebelum menentukan hasil akhir:
+
+1. DETEKSI VISUAL & PEMISAHAN ITEM:
+   - Identifikasi setiap komponen makanan yang ada di dalam wadah/piring secara terpisah.
+   - Amati tekstur permukaannya: Apakah mengilap/berminyak (gorengan/tumisan/balado) atau bersantan? Jika ya, tambahkan estimasi 5-10g lemak ekstra per porsi dari minyak/santan.
+
+2. ANCHOR & KALIBRASI UKURAN 2D:
+   - Gunakan piring, mangkuk, sendok/garpu, atau batas wadah di sekitar makanan sebagai referensi skala visual.
+   - Pakai standar porsi lokal Indonesia sebagai acuan dasar:
+     * 1 centong nasi putih standar (rata) = ~100g (130 kcal).
+     * 1 centong nasi menumpuk/penuh = ~150-200g.
+     * 1 potong ayam bagian dada/paha sedang = ~80-100g.
+     * 1 sendok makan sambal/bumbu tumis = ~15-20g.
+
+3. UNCERTAINTY & RANGE ESTIMATION:
+   - Tentukan batas bawah (min) dan batas atas (max) estimasi gramasi berdasarkan perspektif foto 2D.
+   - Tentukan nilai tengah terkuat (berat_terpilih_gram) berdasarkan analisis visual tersebut.
+   - Berikan confidence_score (1-100%) berdasarkan kejelasan foto, tingkat pencahayaan, dan keterlihatan komponen makanan.
+
+4. PERHITUNGAN MAKRONUTRISI:
+   - Hitung total kalori, protein, karbohidrat, dan lemak berdasarkan berat_terpilih_gram dan komposisi bahan yang terdeteksi (jumlahkan semua komponen jika makanan terdiri dari beberapa item).
+   - Sertakan feedback gizi singkat dan relevan dengan target kesehatan pengguna.
+
+---
+
+### FORMAT OUTPUT (STRICT JSON ONLY):
+Kembalikan respons HANYA dalam format JSON valid sesuai skema yang ditentukan tanpa teks pembuka atau penutup tambahan.
+""".strip()
 
 
 # ----------------------------------------------------
@@ -625,6 +669,11 @@ def init_db():
         # (hanya boleh konstanta), jadi kolom lama cukup NULL — nilai baru tetap terisi otomatis
         # untuk akun yang didaftarkan setelah ini (lihat CREATE TABLE di atas).
         ensure_column(cursor, "users", "created_at", "TIMESTAMP")
+
+        # Kolom baru untuk menyimpan hasil estimasi range berat & confidence score dari CV
+        ensure_column(cursor, "daily_logs", "weight_min_g", "REAL")
+        ensure_column(cursor, "daily_logs", "weight_max_g", "REAL")
+        ensure_column(cursor, "daily_logs", "confidence_score", "INTEGER")
 
         # Index unik untuk username & email (NULL boleh berulang di SQLite, jadi aman untuk data lama)
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)")
@@ -970,7 +1019,7 @@ if "Log & Rekomendasi" in menu_selection:
         user_target_row = cursor.fetchone()
 
         cursor.execute(
-            "SELECT id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, input_method, logged_at, image_path "
+            "SELECT id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, input_method, logged_at, image_path, weight_min_g, weight_max_g, confidence_score "
             "FROM daily_logs WHERE user_id = ? AND DATE(logged_at) = ? ORDER BY id DESC",
             (active_user_id, today_str)
         )
@@ -1163,7 +1212,8 @@ if "Log & Rekomendasi" in menu_selection:
 
     if logs:
         for log in logs:
-            log_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_eval, method, logged_at, img_path = log
+            (log_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_eval, method, logged_at,
+             img_path, weight_min_g, weight_max_g, confidence_score) = log
 
             with st.expander(f"🍽️ {food_name} — {calories:.0f} kcal ({logged_at[-8:-3]})"):
                 col_a, col_b = st.columns([3, 1])
@@ -1176,6 +1226,8 @@ if "Log & Rekomendasi" in menu_selection:
                     }
                     method_label = method_labels.get(method, method)
                     st.write(f"**Porsi:** {weight_g} gram &nbsp;·&nbsp; **Input:** {method_label}")
+                    if weight_min_g is not None and weight_max_g is not None:
+                        st.caption(f"Estimasi rentang berat: {weight_min_g:.0f}–{weight_max_g:.0f} g" + (f" · Keyakinan AI: {confidence_score:.0f}%" if confidence_score is not None else ""))
                     st.write(f"**Nutrisi:** Protein {protein_g}g · Karbo {carbs_g}g · Lemak {fat_g}g")
                     st.info(f"**AI Feedback:** {ai_eval if ai_eval else 'Tidak ada catatan.'}")
                     if img_path and os.path.exists(img_path):
@@ -1234,7 +1286,10 @@ elif "Input Makanan" in menu_selection:
                     else:
                         with st.spinner("Menganalisis jenis makanan & kandungan nutrisi..."):
                             try:
-                                prompt = f"Identifikasi makanan ini secara presisi dan berikan analisis nutrisi serta feedback singkat dalam Bahasa Indonesia untuk pengguna dengan target kesehatan: '{default_goal}'."
+                                prompt = f"""{FOOD_VISION_SYSTEM_PROMPT}
+
+Konteks tambahan: analisis foto ini untuk pengguna dengan target kesehatan '{default_goal}'.
+Sertakan feedback gizi singkat yang relevan dengan target kesehatan tersebut di field ai_feedback."""
 
                                 image_bytes = uploaded_file.getvalue()
                                 image_mime = uploaded_file.type or "image/jpeg"
@@ -1263,8 +1318,8 @@ elif "Input Makanan" in menu_selection:
                                 with sqlite3.connect(DB_NAME) as conn:
                                     cursor = conn.cursor()
                                     cursor.execute('''
-                                        INSERT INTO daily_logs (user_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, image_path, input_method, logged_at)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_photo', ?)
+                                        INSERT INTO daily_logs (user_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, image_path, input_method, logged_at, weight_min_g, weight_max_g, confidence_score)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_photo', ?, ?, ?, ?)
                                     ''', (
                                         active_user_id,
                                         parsed_data.food_name,
@@ -1275,11 +1330,18 @@ elif "Input Makanan" in menu_selection:
                                         parsed_data.fat_g,
                                         parsed_data.ai_feedback,
                                         file_path,
-                                        current_time
+                                        current_time,
+                                        parsed_data.estimated_weight_min_g,
+                                        parsed_data.estimated_weight_max_g,
+                                        parsed_data.confidence_score
                                     ))
                                     conn.commit()
 
-                                st.success(f"Berhasil mencatat: **{parsed_data.food_name}** ({parsed_data.calories} kcal)")
+                                st.success(
+                                    f"Berhasil mencatat: **{parsed_data.food_name}** ({parsed_data.calories:.0f} kcal, "
+                                    f"~{parsed_data.estimated_weight_g:.0f}g, rentang {parsed_data.estimated_weight_min_g:.0f}-"
+                                    f"{parsed_data.estimated_weight_max_g:.0f}g, keyakinan {parsed_data.confidence_score}%)"
+                                )
                             except Exception as e:
                                 st.error(f"Terjadi kesalahan analisis: {e}")
 
@@ -1300,7 +1362,10 @@ elif "Input Makanan" in menu_selection:
                         Identifikasi makanan tersebut secara presisi dan berikan analisis nutrisi
                         serta feedback singkat dalam Bahasa Indonesia untuk pengguna dengan
                         target kesehatan: '{default_goal}'. Jika ada beberapa item makanan,
-                        jumlahkan menjadi satu estimasi total.
+                        jumlahkan menjadi satu estimasi total. Karena tidak ada foto, gunakan asumsi
+                        porsi standar Indonesia dan tetap isi estimated_weight_min_g / estimated_weight_max_g
+                        sebagai rentang wajar dari estimasi tersebut, dengan confidence_score yang mencerminkan
+                        bahwa estimasi ini berbasis teks (tanpa gambar), bukan visual.
                         """
                         interaction = client.interactions.create(
                             model=GEMINI_MODEL,
@@ -1317,8 +1382,8 @@ elif "Input Makanan" in menu_selection:
                         with sqlite3.connect(DB_NAME) as conn:
                             cursor = conn.cursor()
                             cursor.execute('''
-                                INSERT INTO daily_logs (user_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, image_path, input_method, logged_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ai_text', ?)
+                                INSERT INTO daily_logs (user_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, image_path, input_method, logged_at, weight_min_g, weight_max_g, confidence_score)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ai_text', ?, ?, ?, ?)
                             ''', (
                                 active_user_id,
                                 parsed_data.food_name,
@@ -1328,11 +1393,14 @@ elif "Input Makanan" in menu_selection:
                                 parsed_data.carbs_g,
                                 parsed_data.fat_g,
                                 parsed_data.ai_feedback,
-                                current_time
+                                current_time,
+                                parsed_data.estimated_weight_min_g,
+                                parsed_data.estimated_weight_max_g,
+                                parsed_data.confidence_score
                             ))
                             conn.commit()
 
-                        st.success(f"Berhasil mencatat: **{parsed_data.food_name}** ({parsed_data.calories} kcal)")
+                        st.success(f"Berhasil mencatat: **{parsed_data.food_name}** ({parsed_data.calories:.0f} kcal)")
                     except Exception as e:
                         st.error(f"Terjadi kesalahan analisis: {e}")
 
