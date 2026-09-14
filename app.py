@@ -726,7 +726,7 @@ if st.session_state.logged_in_user_id is None:
     col_a, col_b, col_c = st.columns([1, 1.4, 1])
     with col_b:
         st.markdown('<div class="auth-card">', unsafe_allow_html=True)
-        tab_login, tab_register = st.tabs(["🔑 Login", "📝 Daftar Akun"])
+        tab_login, tab_register = st.tabs(["Login", "Daftar Akun"])
 
         with tab_login:
             st.markdown('<div class="auth-title">Selamat Datang Kembali</div>', unsafe_allow_html=True)
@@ -838,7 +838,7 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    if st.button("🚪 Logout", use_container_width=True):
+    if st.button("Logout", use_container_width=True):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
