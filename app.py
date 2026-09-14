@@ -860,6 +860,15 @@ with st.sidebar:
     menu_selection = menu_raw
 
     st.divider()
+    st.caption("💬 **Ulasan & Feedback**")
+    st.write("Bantu kami meningkatkan NutriTrack AI.")
+    st.link_button(
+        "📝 Isi Form Ulasan", 
+        "https://forms.gle/xGBUMggXgRc3hPwGA", 
+        use_container_width=True
+    )
+
+    st.divider()
     st.markdown("### 👤 Profil")
 
     name = st.text_input("Nama Pengguna", active_user["name"])
