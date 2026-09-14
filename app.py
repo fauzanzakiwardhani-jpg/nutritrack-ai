@@ -621,7 +621,10 @@ def init_db():
         ensure_column(cursor, "users", "target_fat_g", "REAL")
         ensure_column(cursor, "users", "custom_macro_mode", "INTEGER DEFAULT 0")
         ensure_column(cursor, "users", "target_water_ml", "REAL DEFAULT 2000")
-        ensure_column(cursor, "users", "created_at", "TIMESTAMP DEFAULT (datetime('now','localtime'))")
+        # Catatan: SQLite tidak izinkan ekspresi/fungsi sebagai default saat ALTER TABLE ADD COLUMN
+        # (hanya boleh konstanta), jadi kolom lama cukup NULL — nilai baru tetap terisi otomatis
+        # untuk akun yang didaftarkan setelah ini (lihat CREATE TABLE di atas).
+        ensure_column(cursor, "users", "created_at", "TIMESTAMP")
 
         # Index unik untuk username & email (NULL boleh berulang di SQLite, jadi aman untuk data lama)
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)")
