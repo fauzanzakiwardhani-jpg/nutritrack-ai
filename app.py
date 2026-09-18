@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import altair as alt
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from google import genai
 from PIL import Image
@@ -508,11 +509,11 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # ----------------------------------------------------
 class NutritionAnalysis(BaseModel):
     food_name: str = Field(description="Nama makanan dalam Bahasa Indonesia")
-    estimated_weight_min_g: float = Field(description="Batas bawah estimasi berat porsi dalam gram, berdasarkan analisis kalibrasi visual")
-    estimated_weight_max_g: float = Field(description="Batas atas estimasi berat porsi dalam gram, berdasarkan analisis kalibrasi visual")
-    estimated_weight_g: float = Field(description="Berat porsi terpilih (nilai tengah terkuat) dalam gram — dasar perhitungan kalori & makro")
-    confidence_score: int = Field(description="Skor keyakinan estimasi 1-100, berdasarkan kejelasan foto, pencahayaan, dan keterlihatan komponen makanan")
-    calories: float = Field(description="Total kalori dalam kcal, dihitung dari berat_terpilih_gram")
+    estimated_weight_min_g: float = Field(description="Batas bawah (min) estimasi berat porsi dalam gram, hasil kalibrasi visual 2D")
+    estimated_weight_max_g: float = Field(description="Batas atas (max) estimasi berat porsi dalam gram, hasil kalibrasi visual 2D")
+    estimated_weight_g: float = Field(description="Berat porsi terpilih (nilai tengah terkuat / berat_terpilih_gram) dalam gram — dipakai sebagai dasar perhitungan kalori & makro")
+    confidence_score: int = Field(description="Skor keyakinan estimasi 1-100, berdasarkan kejelasan foto, pencahayaan, dan keterlihatan komponen makanan", ge=1, le=100)
+    calories: float = Field(description="Total kalori dalam kcal, dihitung dari estimated_weight_g")
     protein_g: float = Field(description="Kandungan protein dalam gram")
     carbs_g: float = Field(description="Kandungan karbohidrat dalam gram")
     fat_g: float = Field(description="Kandungan lemak dalam gram")
@@ -534,6 +535,8 @@ class RecipeSuggestions(BaseModel):
 
 # ----------------------------------------------------
 # 3b. SYSTEM PROMPT — ANALISIS FOTO MAKANAN (CHAIN-OF-THOUGHT)
+# Dipakai khusus untuk mode "Ambil Foto" pada Computer Vision (deteksi komponen,
+# kalibrasi ukuran 2D, estimasi rentang berat + confidence score).
 # ----------------------------------------------------
 FOOD_VISION_SYSTEM_PROMPT = """
 Kamu adalah pakar nutrisi AI dan spesialis Computer Vision khusus analisis makanan khas Indonesia dan internasional.
@@ -559,17 +562,17 @@ Lakukan penalaran secara berurutan sebelum menentukan hasil akhir:
 
 3. UNCERTAINTY & RANGE ESTIMATION:
    - Tentukan batas bawah (min) dan batas atas (max) estimasi gramasi berdasarkan perspektif foto 2D.
-   - Tentukan nilai tengah terkuat (berat_terpilih_gram) berdasarkan analisis visual tersebut.
-   - Berikan confidence_score (1-100%) berdasarkan kejelasan foto, tingkat pencahayaan, dan keterlihatan komponen makanan.
+   - Tentukan nilai tengah terkuat (estimated_weight_g) berdasarkan analisis visual tersebut.
+   - Berikan confidence_score (1-100) berdasarkan kejelasan foto, tingkat pencahayaan, dan keterlihatan komponen makanan.
 
 4. PERHITUNGAN MAKRONUTRISI:
-   - Hitung total kalori, protein, karbohidrat, dan lemak berdasarkan berat_terpilih_gram dan komposisi bahan yang terdeteksi (jumlahkan semua komponen jika makanan terdiri dari beberapa item).
+   - Hitung total kalori, protein, karbohidrat, dan lemak berdasarkan estimated_weight_g dan komposisi bahan yang terdeteksi (jumlahkan semua komponen jika makanan terdiri dari beberapa item).
    - Sertakan feedback gizi singkat dan relevan dengan target kesehatan pengguna.
 
 ---
 
 ### FORMAT OUTPUT (STRICT JSON ONLY):
-Kembalikan respons HANYA dalam format JSON valid sesuai skema yang ditentukan tanpa teks pembuka atau penutup tambahan.
+Kembalikan respons HANYA dalam format JSON valid sesuai skema yang ditentukan, tanpa teks pembuka, penjelasan proses berpikir, atau penutup tambahan.
 """.strip()
 
 
@@ -670,7 +673,7 @@ def init_db():
         # untuk akun yang didaftarkan setelah ini (lihat CREATE TABLE di atas).
         ensure_column(cursor, "users", "created_at", "TIMESTAMP")
 
-        # Kolom baru untuk menyimpan hasil estimasi range berat & confidence score dari CV
+        # Kolom baru: hasil estimasi rentang berat (min/max) & confidence score dari analisis CV foto
         ensure_column(cursor, "daily_logs", "weight_min_g", "REAL")
         ensure_column(cursor, "daily_logs", "weight_max_g", "REAL")
         ensure_column(cursor, "daily_logs", "confidence_score", "INTEGER")
@@ -755,6 +758,42 @@ def create_user(username, email, password, name, age, gender, height_cm, weight_
 
 
 # ----------------------------------------------------
+# 6b. JS INJECTION HELPERS (sidebar auto-collapse & iOS autofill)
+# ----------------------------------------------------
+def inject_sidebar_autocollapse():
+    """Auto-collapse sidebar begitu salah satu opsi menu (radio navigasi) di sidebar
+    dipilih pengguna — supaya konten utama langsung mendapat ruang penuh di layar kecil."""
+    components.html("""
+        <script>
+        (function() {
+            const doc = window.parent.document;
+            if (doc.__sidebarAutoCollapseBound) return;  // cegah listener dobel tiap rerun
+            doc.__sidebarAutoCollapseBound = true;
+
+            function collapseSidebar() {
+                const wrap = doc.querySelector('[data-testid="stSidebarCollapseButton"]');
+                if (!wrap) return;
+                const btn = wrap.tagName === 'BUTTON' ? wrap : wrap.querySelector('button');
+                if (btn) btn.click();
+            }
+
+            doc.addEventListener('click', function(e) {
+                const label = e.target.closest('label');
+                if (!label) return;
+                const isRadio = label.closest('div[data-testid="stRadio"]');
+                const inSidebar = label.closest('[data-testid="stSidebar"]');
+                if (isRadio && inSidebar) {
+                    // beri jeda agar Streamlit sempat memproses rerun & re-render dulu
+                    setTimeout(collapseSidebar, 200);
+                }
+            }, true);
+        })();
+        </script>
+    """, height=0)
+
+
+
+# ----------------------------------------------------
 # 7. HEADER BANNER (selalu tampil, termasuk di halaman login)
 # ----------------------------------------------------
 st.markdown("""
@@ -781,8 +820,8 @@ if st.session_state.logged_in_user_id is None:
             st.markdown('<div class="auth-title">Selamat Datang Kembali</div>', unsafe_allow_html=True)
             st.markdown('<div class="auth-subtitle">Masuk untuk melanjutkan pelacakan gizi kamu.</div>', unsafe_allow_html=True)
             with st.form("login_form"):
-                login_id = st.text_input("Username atau Email")
-                login_pw = st.text_input("Password", type="password")
+                login_id = st.text_input("Username atau Email", autocomplete="username")
+                login_pw = st.text_input("Password", type="password", autocomplete="current-password")
                 login_submit = st.form_submit_button("Masuk", type="primary", use_container_width=True)
 
                 if login_submit:
@@ -800,18 +839,18 @@ if st.session_state.logged_in_user_id is None:
             st.markdown('<div class="auth-title">Buat Akun Baru</div>', unsafe_allow_html=True)
             st.markdown('<div class="auth-subtitle">Isi data diri untuk menghitung target kalori otomatis.</div>', unsafe_allow_html=True)
             with st.form("register_form"):
-                r_name = st.text_input("Nama Lengkap")
+                r_name = st.text_input("Nama Lengkap", autocomplete="name")
                 rc1, rc2 = st.columns(2)
                 with rc1:
-                    r_username = st.text_input("Username")
+                    r_username = st.text_input("Username", autocomplete="username")
                 with rc2:
-                    r_email = st.text_input("Email")
+                    r_email = st.text_input("Email", autocomplete="email")
 
                 rc3, rc4 = st.columns(2)
                 with rc3:
-                    r_password = st.text_input("Password", type="password")
+                    r_password = st.text_input("Password", type="password", autocomplete="new-password")
                 with rc4:
-                    r_password_confirm = st.text_input("Konfirmasi Password", type="password")
+                    r_password_confirm = st.text_input("Konfirmasi Password", type="password", autocomplete="new-password")
 
                 rc5, rc6 = st.columns(2)
                 with rc5:
@@ -898,6 +937,8 @@ with st.sidebar:
         <span class="text">Menu</span>
     </div>
     """, unsafe_allow_html=True)
+
+    inject_sidebar_autocollapse()  # sidebar otomatis collapse begitu menu navigasi dipilih
 
     menu_options = ["Log & Rekomendasi", "Input Makanan", "Hidrasi", "Analytics & Trend", "Export Data"]
     menu_raw = st.radio(
@@ -1227,7 +1268,10 @@ if "Log & Rekomendasi" in menu_selection:
                     method_label = method_labels.get(method, method)
                     st.write(f"**Porsi:** {weight_g} gram &nbsp;·&nbsp; **Input:** {method_label}")
                     if weight_min_g is not None and weight_max_g is not None:
-                        st.caption(f"Estimasi rentang berat: {weight_min_g:.0f}–{weight_max_g:.0f} g" + (f" · Keyakinan AI: {confidence_score:.0f}%" if confidence_score is not None else ""))
+                        st.caption(
+                            f"📏 Estimasi rentang berat (Computer Vision): {weight_min_g:.0f}–{weight_max_g:.0f} g"
+                            + (f" · 🎯 Keyakinan AI: {confidence_score:.0f}%" if confidence_score is not None else "")
+                        )
                     st.write(f"**Nutrisi:** Protein {protein_g}g · Karbo {carbs_g}g · Lemak {fat_g}g")
                     st.info(f"**AI Feedback:** {ai_eval if ai_eval else 'Tidak ada catatan.'}")
                     if img_path and os.path.exists(img_path):
@@ -1279,17 +1323,18 @@ elif "Input Makanan" in menu_selection:
                 st.image(image, caption="Foto yang Diunggah", use_container_width=True)
 
             with col_info:
-                st.info("Pindai untuk menghitung estimasi kalori dan makronutrisi secara otomatis.")
+                st.info("Pindai untuk menghitung estimasi kalori dan makronutrisi secara otomatis (deteksi komponen, kalibrasi ukuran, & rentang keyakinan).")
                 if st.button("Input Foto", type="primary", use_container_width=True):
                     if not api_key:
                         st.error("API Key belum terkonfigurasi!")
                     else:
-                        with st.spinner("Menganalisis jenis makanan & kandungan nutrisi..."):
+                        with st.spinner("Menganalisis komponen makanan, kalibrasi ukuran & kandungan nutrisi..."):
                             try:
-                                prompt = f"""{FOOD_VISION_SYSTEM_PROMPT}
-
-Konteks tambahan: analisis foto ini untuk pengguna dengan target kesehatan '{default_goal}'.
-Sertakan feedback gizi singkat yang relevan dengan target kesehatan tersebut di field ai_feedback."""
+                                user_prompt = f"""
+                                Analisis foto makanan ini mengikuti tahapan chain-of-thought yang sudah ditentukan.
+                                Target kesehatan pengguna saat ini: '{default_goal}'.
+                                Sertakan feedback gizi singkat yang relevan dengan target kesehatan tersebut.
+                                """
 
                                 image_bytes = uploaded_file.getvalue()
                                 image_mime = uploaded_file.type or "image/jpeg"
@@ -1297,7 +1342,8 @@ Sertakan feedback gizi singkat yang relevan dengan target kesehatan tersebut di 
                                 interaction = client.interactions.create(
                                     model=GEMINI_MODEL,
                                     input=[
-                                        {"type": "text", "text": prompt},
+                                        {"type": "text", "text": FOOD_VISION_SYSTEM_PROMPT},
+                                        {"type": "text", "text": user_prompt},
                                         {"type": "image", "data": base64.b64encode(image_bytes).decode('utf-8'), "mime_type": image_mime},
                                     ],
                                     response_format={
@@ -1333,7 +1379,7 @@ Sertakan feedback gizi singkat yang relevan dengan target kesehatan tersebut di 
                                         current_time,
                                         parsed_data.estimated_weight_min_g,
                                         parsed_data.estimated_weight_max_g,
-                                        parsed_data.confidence_score
+                                        parsed_data.confidence_score,
                                     ))
                                     conn.commit()
 
@@ -1362,10 +1408,10 @@ Sertakan feedback gizi singkat yang relevan dengan target kesehatan tersebut di 
                         Identifikasi makanan tersebut secara presisi dan berikan analisis nutrisi
                         serta feedback singkat dalam Bahasa Indonesia untuk pengguna dengan
                         target kesehatan: '{default_goal}'. Jika ada beberapa item makanan,
-                        jumlahkan menjadi satu estimasi total. Karena tidak ada foto, gunakan asumsi
+                        jumlahkan menjadi satu estimasi total. Karena tidak ada foto, gunakan
                         porsi standar Indonesia dan tetap isi estimated_weight_min_g / estimated_weight_max_g
                         sebagai rentang wajar dari estimasi tersebut, dengan confidence_score yang mencerminkan
-                        bahwa estimasi ini berbasis teks (tanpa gambar), bukan visual.
+                        bahwa estimasi ini murni berbasis teks (biasanya lebih rendah daripada estimasi dari foto).
                         """
                         interaction = client.interactions.create(
                             model=GEMINI_MODEL,
@@ -1396,7 +1442,7 @@ Sertakan feedback gizi singkat yang relevan dengan target kesehatan tersebut di 
                                 current_time,
                                 parsed_data.estimated_weight_min_g,
                                 parsed_data.estimated_weight_max_g,
-                                parsed_data.confidence_score
+                                parsed_data.confidence_score,
                             ))
                             conn.commit()
 
