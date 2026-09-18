@@ -1502,7 +1502,7 @@ elif "Hidrasi" in menu_selection:
     water_pct = min((total_water / target_water_ml) * 100, 100) if target_water_ml > 0 else 0
 
     st.markdown('<div class="section-label">Hidrasi</div>', unsafe_allow_html=True)
-    st.markdown("### 💧 Pencatat Asupan Air Harian")
+    st.markdown("### Pencatat Asupan Air Harian")
 
     w1, w2, w3 = st.columns(3)
     with w1:
