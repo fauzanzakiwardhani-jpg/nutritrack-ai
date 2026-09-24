@@ -1,18 +1,24 @@
+import base64
 import hashlib
 import io
+import json
 import os
 import secrets
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from dotenv import load_dotenv
+from google import genai
 from PIL import Image
+from pydantic import BaseModel, Field
 
-import ai_service
-from ai_service import AINotConfiguredError, AITimeoutError
+# Model Gemini yang dipakai lewat Interactions API (client.interactions.create).
+# Ganti di sini jika Google merilis model lebih baru / model ini dideprecate lagi.
+GEMINI_MODEL = "gemini-3.6-flash"
 
 try:
     from fpdf import FPDF
@@ -35,8 +41,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-api_key = ai_service.API_KEY  # sudah di-load dari .env oleh ai_service
-if not api_key:
+load_dotenv()
+api_key = os.getenv("GEMINI_API_KEY")
+
+if api_key:
+    client = genai.Client(api_key=api_key)
+else:
     st.error("GEMINI_API_KEY tidak ditemukan di file .env!")
 
 DB_NAME = "gizi_app.db"
@@ -52,28 +62,6 @@ ACTIVITY_OPTIONS = [
     'Berat (6-7 hari/minggu)'
 ]
 GOAL_OPTIONS = ['Turunkan Berat Badan', 'Jaga Berat Badan', 'Naikkan Berat Badan']
-
-
-def show_ai_error(e: Exception):
-    """Tampilkan pesan error AI yang informatif lewat st.error()."""
-    if isinstance(e, AITimeoutError):
-        st.error(f"⏱️ {e} Periksa koneksi internet lalu coba lagi.")
-    elif isinstance(e, AINotConfiguredError):
-        st.error("API Key belum terkonfigurasi! Isi GEMINI_API_KEY di file .env.")
-    elif isinstance(e, ValueError):
-        # Termasuk pydantic ValidationError -> JSON terpotong / tidak sesuai skema
-        st.error(f"Respons AI tidak bisa dibaca (kemungkinan terpotong). Coba lagi atau persingkat deskripsi. Detail: {e}")
-    else:
-        msg = str(e)
-        low = msg.lower()
-        if "timeout" in low or "timed out" in low:
-            st.error("⏱️ Koneksi ke server AI melebihi batas waktu. Coba lagi sebentar.")
-        elif "429" in msg or "quota" in low or "resource_exhausted" in low:
-            st.error("Kuota API Gemini sedang habis/terbatas. Tunggu beberapa saat lalu coba lagi.")
-        elif "404" in msg or "not found" in low:
-            st.error(f"Model AI tidak ditemukan. Cek konstanta GEMINI_MODEL di ai_service.py. Detail: {msg}")
-        else:
-            st.error(f"Terjadi kesalahan saat menganalisis: {msg}")
 
 
 # ----------------------------------------------------
@@ -517,6 +505,78 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
 # ----------------------------------------------------
+# 3. SCHEMA STRUCTURED OUTPUT (PYDANTIC)
+# ----------------------------------------------------
+class NutritionAnalysis(BaseModel):
+    food_name: str = Field(description="Nama makanan dalam Bahasa Indonesia")
+    estimated_weight_min_g: float = Field(description="Batas bawah (min) estimasi berat porsi dalam gram, hasil kalibrasi visual 2D")
+    estimated_weight_max_g: float = Field(description="Batas atas (max) estimasi berat porsi dalam gram, hasil kalibrasi visual 2D")
+    estimated_weight_g: float = Field(description="Berat porsi terpilih (nilai tengah terkuat / berat_terpilih_gram) dalam gram — dipakai sebagai dasar perhitungan kalori & makro")
+    confidence_score: int = Field(description="Skor keyakinan estimasi 1-100, berdasarkan kejelasan foto, pencahayaan, dan keterlihatan komponen makanan", ge=1, le=100)
+    calories: float = Field(description="Total kalori dalam kcal, dihitung dari estimated_weight_g")
+    protein_g: float = Field(description="Kandungan protein dalam gram")
+    carbs_g: float = Field(description="Kandungan karbohidrat dalam gram")
+    fat_g: float = Field(description="Kandungan lemak dalam gram")
+    ai_feedback: str = Field(description="Ulasan gizi dan saran singkat dalam Bahasa Indonesia")
+
+
+class RecipeIdea(BaseModel):
+    name: str = Field(description="Nama resep/menu dalam Bahasa Indonesia")
+    estimated_calories: float = Field(description="Estimasi kalori dalam kcal")
+    protein_g: float = Field(description="Estimasi protein dalam gram")
+    carbs_g: float = Field(description="Estimasi karbohidrat dalam gram")
+    fat_g: float = Field(description="Estimasi lemak dalam gram")
+    reason: str = Field(description="Alasan singkat kenapa menu ini cocok untuk sisa kuota pengguna")
+
+
+class RecipeSuggestions(BaseModel):
+    recipes: list[RecipeIdea] = Field(description="Daftar 3 ide resep/menu makanan sehat")
+
+
+# ----------------------------------------------------
+# 3b. SYSTEM PROMPT — ANALISIS FOTO MAKANAN (CHAIN-OF-THOUGHT)
+# Dipakai khusus untuk mode "Ambil Foto" pada Computer Vision (deteksi komponen,
+# kalibrasi ukuran 2D, estimasi rentang berat + confidence score).
+# ----------------------------------------------------
+FOOD_VISION_SYSTEM_PROMPT = """
+Kamu adalah pakar nutrisi AI dan spesialis Computer Vision khusus analisis makanan khas Indonesia dan internasional.
+
+Tugas utama kamu adalah menganalisis foto makanan yang diunggah pengguna, mendeteksi semua komponen bahan, mengestimasi berat (gram) secara rasional, dan menghitung total kandungan makronutrisinya.
+
+---
+
+### TAHAPAN ANALISIS (CHAIN-OF-THOUGHT):
+Lakukan penalaran secara berurutan sebelum menentukan hasil akhir:
+
+1. DETEKSI VISUAL & PEMISAHAN ITEM:
+   - Identifikasi setiap komponen makanan yang ada di dalam wadah/piring secara terpisah.
+   - Amati tekstur permukaannya: Apakah mengilap/berminyak (gorengan/tumisan/balado) atau bersantan? Jika ya, tambahkan estimasi 5-10g lemak ekstra per porsi dari minyak/santan.
+
+2. ANCHOR & KALIBRASI UKURAN 2D:
+   - Gunakan piring, mangkuk, sendok/garpu, atau batas wadah di sekitar makanan sebagai referensi skala visual.
+   - Pakai standar porsi lokal Indonesia sebagai acuan dasar:
+     * 1 centong nasi putih standar (rata) = ~100g (130 kcal).
+     * 1 centong nasi menumpuk/penuh = ~150-200g.
+     * 1 potong ayam bagian dada/paha sedang = ~80-100g.
+     * 1 sendok makan sambal/bumbu tumis = ~15-20g.
+
+3. UNCERTAINTY & RANGE ESTIMATION:
+   - Tentukan batas bawah (min) dan batas atas (max) estimasi gramasi berdasarkan perspektif foto 2D.
+   - Tentukan nilai tengah terkuat (estimated_weight_g) berdasarkan analisis visual tersebut.
+   - Berikan confidence_score (1-100) berdasarkan kejelasan foto, tingkat pencahayaan, dan keterlihatan komponen makanan.
+
+4. PERHITUNGAN MAKRONUTRISI:
+   - Hitung total kalori, protein, karbohidrat, dan lemak berdasarkan estimated_weight_g dan komposisi bahan yang terdeteksi (jumlahkan semua komponen jika makanan terdiri dari beberapa item).
+   - Sertakan feedback gizi singkat dan relevan dengan target kesehatan pengguna.
+
+---
+
+### FORMAT OUTPUT (STRICT JSON ONLY):
+Kembalikan respons HANYA dalam format JSON valid sesuai skema yang ditentukan, tanpa teks pembuka, penjelasan proses berpikir, atau penutup tambahan.
+""".strip()
+
+
+# ----------------------------------------------------
 # 4. PASSWORD HASHING (stdlib only — hashlib.pbkdf2_hmac + salt acak)
 # ----------------------------------------------------
 PBKDF2_ITERATIONS = 200_000
@@ -608,15 +668,17 @@ def init_db():
         ensure_column(cursor, "users", "target_fat_g", "REAL")
         ensure_column(cursor, "users", "custom_macro_mode", "INTEGER DEFAULT 0")
         ensure_column(cursor, "users", "target_water_ml", "REAL DEFAULT 2000")
-        # SQLite tidak izinkan ekspresi sebagai default saat ALTER TABLE ADD COLUMN,
-        # jadi kolom lama cukup NULL.
+        # Catatan: SQLite tidak izinkan ekspresi/fungsi sebagai default saat ALTER TABLE ADD COLUMN
+        # (hanya boleh konstanta), jadi kolom lama cukup NULL — nilai baru tetap terisi otomatis
+        # untuk akun yang didaftarkan setelah ini (lihat CREATE TABLE di atas).
         ensure_column(cursor, "users", "created_at", "TIMESTAMP")
 
-        # Kolom: rentang berat (min/max) & confidence score dari analisis CV foto
+        # Kolom baru: hasil estimasi rentang berat (min/max) & confidence score dari analisis CV foto
         ensure_column(cursor, "daily_logs", "weight_min_g", "REAL")
         ensure_column(cursor, "daily_logs", "weight_max_g", "REAL")
         ensure_column(cursor, "daily_logs", "confidence_score", "INTEGER")
 
+        # Index unik untuk username & email (NULL boleh berulang di SQLite, jadi aman untuk data lama)
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)")
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)")
 
@@ -696,10 +758,11 @@ def create_user(username, email, password, name, age, gender, height_cm, weight_
 
 
 # ----------------------------------------------------
-# 6b. JS INJECTION HELPERS (sidebar auto-collapse)
+# 6b. JS INJECTION HELPERS (sidebar auto-collapse & iOS autofill)
 # ----------------------------------------------------
 def inject_sidebar_autocollapse():
-    """Auto-collapse sidebar begitu salah satu opsi menu (radio navigasi) di sidebar dipilih."""
+    """Auto-collapse sidebar begitu salah satu opsi menu (radio navigasi) di sidebar
+    dipilih pengguna — supaya konten utama langsung mendapat ruang penuh di layar kecil."""
     components.html("""
         <script>
         (function() {
@@ -720,12 +783,14 @@ def inject_sidebar_autocollapse():
                 const isRadio = label.closest('div[data-testid="stRadio"]');
                 const inSidebar = label.closest('[data-testid="stSidebar"]');
                 if (isRadio && inSidebar) {
+                    // beri jeda agar Streamlit sempat memproses rerun & re-render dulu
                     setTimeout(collapseSidebar, 200);
                 }
             }, true);
         })();
         </script>
     """, height=0)
+
 
 
 # ----------------------------------------------------
@@ -838,6 +903,7 @@ if st.session_state.logged_in_user_id is None:
 active_user = get_user_by_id(st.session_state.logged_in_user_id)
 
 if active_user is None:
+    # Akun tidak ditemukan (edge case) — paksa logout
     st.session_state.logged_in_user_id = None
     st.rerun()
 
@@ -872,7 +938,7 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    inject_sidebar_autocollapse()
+    inject_sidebar_autocollapse()  # sidebar otomatis collapse begitu menu navigasi dipilih
 
     menu_options = ["Log & Rekomendasi", "Input Makanan", "Hidrasi", "Analytics & Trend", "Export Data"]
     menu_raw = st.radio(
@@ -887,8 +953,8 @@ with st.sidebar:
     st.caption("💬 **Ulasan & Feedback**")
     st.write("Bantu kami meningkatkan NutriTrack AI.")
     st.link_button(
-        "📝 Isi Form Ulasan",
-        "https://forms.gle/xGBUMggXgRc3hPwGA",
+        "📝 Isi Form Ulasan", 
+        "https://forms.gle/xGBUMggXgRc3hPwGA", 
         use_container_width=True
     )
 
@@ -1135,16 +1201,36 @@ if "Log & Rekomendasi" in menu_selection:
         sisa_fat = max(macro_target_fat - total_fat, 0)
 
         if st.button("✨ Cari Ide Menu Sehat", type="primary"):
-            if not ai_service.is_configured():
+            if not api_key:
                 st.error("API Key belum terkonfigurasi!")
             else:
-                try:
-                    with st.spinner("Menyusun ide menu berdasarkan sisa kuota kalori & makro Anda..."):
-                        st.session_state["recipe_suggestions"] = ai_service.suggest_recipes(
-                            sisa, sisa_protein, sisa_carbs, sisa_fat, default_goal
+                with st.spinner("Menyusun ide menu berdasarkan sisa kuota kalori & makro Anda..."):
+                    try:
+                        recipe_prompt = f"""
+                        Berikan 3 ide resep/menu makanan sehat khas Indonesia dalam Bahasa Indonesia,
+                        yang cocok dengan sisa kuota gizi pengguna hari ini:
+                        - Sisa kalori: {sisa:.0f} kcal
+                        - Sisa protein: {sisa_protein:.0f} g
+                        - Sisa karbohidrat: {sisa_carbs:.0f} g
+                        - Sisa lemak: {sisa_fat:.0f} g
+                        - Target kesehatan pengguna: {default_goal}
+
+                        Setiap resep harus muat dalam sisa kuota kalori tersebut (tidak melebihi).
+                        Sertakan alasan singkat kenapa menu tersebut cocok.
+                        """
+                        interaction = client.interactions.create(
+                            model=GEMINI_MODEL,
+                            input=recipe_prompt,
+                            response_format={
+                                "type": "text",
+                                "mime_type": "application/json",
+                                "schema": RecipeSuggestions.model_json_schema(),
+                            },
                         )
-                except Exception as e:
-                    show_ai_error(e)
+                        parsed_recipes = RecipeSuggestions.model_validate_json(interaction.output_text)
+                        st.session_state["recipe_suggestions"] = parsed_recipes.recipes
+                    except Exception as e:
+                        st.error(f"Terjadi kesalahan saat mengambil rekomendasi: {e}")
 
         if "recipe_suggestions" in st.session_state:
             for recipe in st.session_state["recipe_suggestions"]:
@@ -1182,9 +1268,8 @@ if "Log & Rekomendasi" in menu_selection:
                     method_label = method_labels.get(method, method)
                     st.write(f"**Porsi:** {weight_g} gram &nbsp;·&nbsp; **Input:** {method_label}")
                     if weight_min_g is not None and weight_max_g is not None:
-                        label_rentang = "Computer Vision" if method == "ai_photo" else "estimasi dari teks"
                         st.caption(
-                            f"📏 Estimasi rentang berat ({label_rentang}): {weight_min_g:.0f}–{weight_max_g:.0f} g"
+                            f"📏 Estimasi rentang berat (Computer Vision): {weight_min_g:.0f}–{weight_max_g:.0f} g"
                             + (f" · 🎯 Keyakinan AI: {confidence_score:.0f}%" if confidence_score is not None else "")
                         )
                     st.write(f"**Nutrisi:** Protein {protein_g}g · Karbo {carbs_g}g · Lemak {fat_g}g")
@@ -1227,7 +1312,6 @@ elif "Input Makanan" in menu_selection:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ---------------- FOTO ----------------
     if input_type == "Ambil Foto":
         uploaded_file = st.file_uploader("Unggah foto hidangan kamu di sini", type=["jpg", "jpeg", "png"])
 
@@ -1241,16 +1325,35 @@ elif "Input Makanan" in menu_selection:
             with col_info:
                 st.info("Pindai untuk menghitung estimasi kalori dan makronutrisi secara otomatis (deteksi komponen, kalibrasi ukuran, & rentang keyakinan).")
                 if st.button("Input Foto", type="primary", use_container_width=True):
-                    if not ai_service.is_configured():
+                    if not api_key:
                         st.error("API Key belum terkonfigurasi!")
                     else:
-                        try:
-                            with st.spinner("Menganalisis komponen makanan, kalibrasi ukuran & kandungan nutrisi..."):
-                                parsed_data = ai_service.analyze_food_image(
-                                    uploaded_file.getvalue(),
-                                    uploaded_file.type or "image/jpeg",
-                                    default_goal,
+                        with st.spinner("Menganalisis komponen makanan, kalibrasi ukuran & kandungan nutrisi..."):
+                            try:
+                                user_prompt = f"""
+                                Analisis foto makanan ini mengikuti tahapan chain-of-thought yang sudah ditentukan.
+                                Target kesehatan pengguna saat ini: '{default_goal}'.
+                                Sertakan feedback gizi singkat yang relevan dengan target kesehatan tersebut.
+                                """
+
+                                image_bytes = uploaded_file.getvalue()
+                                image_mime = uploaded_file.type or "image/jpeg"
+
+                                interaction = client.interactions.create(
+                                    model=GEMINI_MODEL,
+                                    input=[
+                                        {"type": "text", "text": FOOD_VISION_SYSTEM_PROMPT},
+                                        {"type": "text", "text": user_prompt},
+                                        {"type": "image", "data": base64.b64encode(image_bytes).decode('utf-8'), "mime_type": image_mime},
+                                    ],
+                                    response_format={
+                                        "type": "text",
+                                        "mime_type": "application/json",
+                                        "schema": NutritionAnalysis.model_json_schema(),
+                                    },
                                 )
+
+                                parsed_data = NutritionAnalysis.model_validate_json(interaction.output_text)
 
                                 now_str = datetime.now().strftime('%Y%m%d_%H%M%S')
                                 file_path = os.path.join(UPLOAD_DIR, f"{now_str}_{uploaded_file.name}")
@@ -1259,7 +1362,8 @@ elif "Input Makanan" in menu_selection:
                                 current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
                                 with sqlite3.connect(DB_NAME) as conn:
-                                    conn.execute('''
+                                    cursor = conn.cursor()
+                                    cursor.execute('''
                                         INSERT INTO daily_logs (user_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, image_path, input_method, logged_at, weight_min_g, weight_max_g, confidence_score)
                                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_photo', ?, ?, ?, ?)
                                     ''', (
@@ -1279,62 +1383,73 @@ elif "Input Makanan" in menu_selection:
                                     ))
                                     conn.commit()
 
-                            st.success(
-                                f"Berhasil mencatat: **{parsed_data.food_name}** ({parsed_data.calories:.0f} kcal, "
-                                f"~{parsed_data.estimated_weight_g:.0f}g, rentang {parsed_data.estimated_weight_min_g:.0f}-"
-                                f"{parsed_data.estimated_weight_max_g:.0f}g, keyakinan {parsed_data.confidence_score}%)"
-                            )
-                        except Exception as e:
-                            show_ai_error(e)
+                                st.success(
+                                    f"Berhasil mencatat: **{parsed_data.food_name}** ({parsed_data.calories:.0f} kcal, "
+                                    f"~{parsed_data.estimated_weight_g:.0f}g, rentang {parsed_data.estimated_weight_min_g:.0f}-"
+                                    f"{parsed_data.estimated_weight_max_g:.0f}g, keyakinan {parsed_data.confidence_score}%)"
+                                )
+                            except Exception as e:
+                                st.error(f"Terjadi kesalahan analisis: {e}")
 
-    # ---------------- TEKS (TEXT AI) ----------------
     elif input_type == "Ketik Singkat":
         st.info("Ketik apa yang kamu makan secara bebas, contoh: *\"Makan soto ayam 1 porsi sama nasi putih setengah\"*. AI akan mengestimasi kalori dan makronutrisinya.")
+        text_input = st.text_area("Deskripsikan makanan kamu:", placeholder="Contoh: Nasi goreng seporsi + telur ceplok + es teh manis", height=100)
 
-        # Form: mengetik TIDAK memicu rerun; analisis hanya jalan saat tombol submit ditekan
-        with st.form(key="text_ai_form", clear_on_submit=False):
-            text_input = st.text_area(
-                "Deskripsikan makanan kamu:",
-                placeholder="Contoh: Nasi goreng seporsi + telur ceplok + es teh manis",
-                height=100,
-                max_chars=500,
-            )
-            text_submitted = st.form_submit_button("Input Teks", type="primary", use_container_width=True)
-
-        if text_submitted:
-            if not ai_service.is_configured():
+        if st.button("Input Teks", type="primary", use_container_width=True):
+            if not api_key:
                 st.error("API Key belum terkonfigurasi!")
             elif not text_input.strip():
                 st.warning("Tolong isi deskripsi makanan terlebih dahulu.")
             else:
-                try:
-                    with st.spinner("Menganalisis nutrisi makananmu..."):
-                        data = ai_service.analyze_food_text(text_input.strip(), default_goal)
-
-                        # Rentang berat & confidence dihitung lokal (estimasi teks = kurang pasti)
-                        w = data.estimated_weight_g
-                        w_min, w_max, conf = round(w * 0.85), round(w * 1.15), 60
+                with st.spinner("Menganalisis deskripsi makanan..."):
+                    try:
+                        prompt = f"""
+                        Berdasarkan deskripsi makanan berikut dari pengguna: "{text_input}"
+                        Identifikasi makanan tersebut secara presisi dan berikan analisis nutrisi
+                        serta feedback singkat dalam Bahasa Indonesia untuk pengguna dengan
+                        target kesehatan: '{default_goal}'. Jika ada beberapa item makanan,
+                        jumlahkan menjadi satu estimasi total. Karena tidak ada foto, gunakan
+                        porsi standar Indonesia dan tetap isi estimated_weight_min_g / estimated_weight_max_g
+                        sebagai rentang wajar dari estimasi tersebut, dengan confidence_score yang mencerminkan
+                        bahwa estimasi ini murni berbasis teks (biasanya lebih rendah daripada estimasi dari foto).
+                        """
+                        interaction = client.interactions.create(
+                            model=GEMINI_MODEL,
+                            input=prompt,
+                            response_format={
+                                "type": "text",
+                                "mime_type": "application/json",
+                                "schema": NutritionAnalysis.model_json_schema(),
+                            },
+                        )
+                        parsed_data = NutritionAnalysis.model_validate_json(interaction.output_text)
                         current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
                         with sqlite3.connect(DB_NAME) as conn:
-                            conn.execute('''
-                                INSERT INTO daily_logs (user_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g,
-                                                        ai_feedback, image_path, input_method, logged_at,
-                                                        weight_min_g, weight_max_g, confidence_score)
+                            cursor = conn.cursor()
+                            cursor.execute('''
+                                INSERT INTO daily_logs (user_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, image_path, input_method, logged_at, weight_min_g, weight_max_g, confidence_score)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ai_text', ?, ?, ?, ?)
-                            ''', (active_user_id, data.food_name, w, data.calories, data.protein_g,
-                                  data.carbs_g, data.fat_g, data.ai_feedback, current_time,
-                                  w_min, w_max, conf))
+                            ''', (
+                                active_user_id,
+                                parsed_data.food_name,
+                                parsed_data.estimated_weight_g,
+                                parsed_data.calories,
+                                parsed_data.protein_g,
+                                parsed_data.carbs_g,
+                                parsed_data.fat_g,
+                                parsed_data.ai_feedback,
+                                current_time,
+                                parsed_data.estimated_weight_min_g,
+                                parsed_data.estimated_weight_max_g,
+                                parsed_data.confidence_score,
+                            ))
                             conn.commit()
 
-                    st.success(
-                        f"Berhasil mencatat: **{data.food_name}** — {data.calories:.0f} kcal · "
-                        f"P {data.protein_g:.0f}g · K {data.carbs_g:.0f}g · L {data.fat_g:.0f}g"
-                    )
-                except Exception as e:
-                    show_ai_error(e)
+                        st.success(f"Berhasil mencatat: **{parsed_data.food_name}** ({parsed_data.calories:.0f} kcal)")
+                    except Exception as e:
+                        st.error(f"Terjadi kesalahan analisis: {e}")
 
-    # ---------------- MANUAL ----------------
     else:
         with st.form("manual_form", clear_on_submit=True):
             st.markdown("##### Form Input Detail Makanan")
@@ -1352,18 +1467,15 @@ elif "Input Makanan" in menu_selection:
 
             submit = st.form_submit_button("Tambahkan ke Log", type="primary", use_container_width=True)
             if submit:
-                if not food_name.strip():
-                    st.warning("Nama makanan tidak boleh kosong.")
-                else:
-                    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    with sqlite3.connect(DB_NAME) as conn:
-                        cursor = conn.cursor()
-                        cursor.execute('''
-                            INSERT INTO daily_logs (user_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, input_method, logged_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?)
-                        ''', (active_user_id, food_name.strip(), weight_g, cals, protein, carbs, fat, feedback, current_time))
-                        conn.commit()
-                    st.toast("Makanan berhasil ditambahkan!", icon="✅")
+                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                with sqlite3.connect(DB_NAME) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT INTO daily_logs (user_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, input_method, logged_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?)
+                    ''', (active_user_id, food_name, weight_g, cals, protein, carbs, fat, feedback, current_time))
+                    conn.commit()
+                st.toast("Makanan berhasil ditambahkan!", icon="✅")
 
 
 # ====================================================
@@ -1485,8 +1597,6 @@ elif "Analytics & Trend" in menu_selection:
     st.markdown('<div class="section-label">Analitik</div>', unsafe_allow_html=True)
     st.markdown("### Trend Asupan Kalori (7 Hari Terakhir)")
 
-    hari_map = {0: 'Sen', 1: 'Sel', 2: 'Rab', 3: 'Kam', 4: 'Jum', 5: 'Sab', 6: 'Min'}
-
     with sqlite3.connect(DB_NAME) as conn:
         query = """
             SELECT DATE(logged_at) as log_date, SUM(calories) as total_calories
@@ -1501,11 +1611,12 @@ elif "Analytics & Trend" in menu_selection:
         cursor.execute("SELECT target_calories FROM users WHERE id = ?", (active_user_id,))
         user_target = cursor.fetchone()
 
-    target_val = user_target[0] if user_target and user_target[0] else 2000.0
+    target_val = user_target[0] if user_target else 2000.0
 
     if not df.empty:
         df['log_date'] = pd.to_datetime(df['log_date'])
 
+        hari_map = {0: 'Sen', 1: 'Sel', 2: 'Rab', 3: 'Kam', 4: 'Jum', 5: 'Sab', 6: 'Min'}
         df['hari'] = df['log_date'].dt.dayofweek.map(hari_map)
         df['day_label'] = df['hari'] + ' ' + df['log_date'].dt.strftime('%d %b')
         df['status'] = df['total_calories'].apply(lambda c: 'Sesuai Target' if c <= target_val else 'Melebihi Target')
@@ -1753,9 +1864,7 @@ elif "Export Data" in menu_selection:
                 for _, row in export_df.iterrows():
                     for val, w in zip(row.tolist(), col_widths):
                         text = "" if pd.isna(val) else str(val)
-                        # Helvetica bawaan hanya mendukung Latin-1; ganti karakter lain agar tidak error
-                        text = text[:35].encode("latin-1", "replace").decode("latin-1")
-                        pdf.cell(w, 6, text, border=1)
+                        pdf.cell(w, 6, text[:35], border=1)
                     pdf.ln()
 
                 pdf_bytes = bytes(pdf.output(dest='S'))
@@ -1774,7 +1883,7 @@ elif "Export Data" in menu_selection:
 # 12. VIRTUAL ASSISTANT (FLOATING CHAT — MUNCUL DI SEMUA HALAMAN)
 # ====================================================
 def get_va_context():
-    """Ringkasan data gizi & hidrasi hari ini (user yang login) untuk konteks asisten AI."""
+    """Ambil ringkasan data gizi & hidrasi hari ini (khusus user yang login) untuk konteks jawaban asisten AI."""
     today_str = datetime.now().strftime('%Y-%m-%d')
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
@@ -1831,7 +1940,7 @@ def handle_va_send():
 
     st.session_state.va_messages.append({"role": "user", "content": user_msg})
 
-    if not ai_service.is_configured():
+    if not api_key:
         st.session_state.va_messages.append({"role": "assistant", "content": "API Key belum terkonfigurasi, jadi saya belum bisa menjawab. Cek file .env kamu ya."})
         st.session_state.va_input_box = ""
         return
@@ -1840,7 +1949,7 @@ def handle_va_send():
     full_prompt = f"""
     Kamu adalah "Nutri", asisten AI ramah di aplikasi NutriTrack AI. Tugasmu menjawab pertanyaan
     seputar gizi/makanan secara umum, DAN memberi saran personal berdasarkan data pengguna berikut
-    jika relevan dengan pertanyaannya. Jawab singkat (maks 4 kalimat), jelas, dan hangat dalam Bahasa Indonesia.
+    jika relevan dengan pertanyaannya. Jawab singkat, jelas, dan hangat dalam Bahasa Indonesia.
 
     {context}
 
@@ -1848,12 +1957,13 @@ def handle_va_send():
     """
 
     try:
-        answer, interaction_id = ai_service.chat_reply(
-            full_prompt, st.session_state.get("va_last_interaction_id")
+        interaction = client.interactions.create(
+            model=GEMINI_MODEL,
+            input=full_prompt,
+            previous_interaction_id=st.session_state.get("va_last_interaction_id"),
         )
-        st.session_state.va_last_interaction_id = interaction_id
-    except AITimeoutError:
-        answer = "Maaf, asisten belum merespons dalam batas waktu. Coba kirim ulang pertanyaanmu ya."
+        st.session_state.va_last_interaction_id = interaction.id
+        answer = interaction.output_text
     except Exception as e:
         answer = f"Maaf, terjadi kesalahan saat memproses: {e}"
 
