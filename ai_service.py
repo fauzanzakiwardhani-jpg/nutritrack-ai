@@ -22,10 +22,10 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 # Ganti di sini jika Google merilis model lebih baru / model ini dideprecate.
 GEMINI_MODEL = "gemini-3.6-flash"
 
-TEXT_TIMEOUT_S = 15      # analisis teks
-RECIPE_TIMEOUT_S = 25    # rekomendasi resep (3 resep, output lebih panjang)
-CHAT_TIMEOUT_S = 20      # asisten Nutri
-IMAGE_TIMEOUT_S = 40     # analisis foto (upload gambar lebih lama)
+TEXT_TIMEOUT_S = 45      # analisis teks — dinaikkan dari 15s: gemini-3.6-flash (thinking) sering >15s
+RECIPE_TIMEOUT_S = 45    # rekomendasi resep (3 resep, output lebih panjang)
+CHAT_TIMEOUT_S = 35      # asisten Nutri
+IMAGE_TIMEOUT_S = 60     # analisis foto (upload gambar + thinking = paling lama)
 
 TEXT_MAX_TOKENS = 2000   # naik dari 800 — thinking tokens bisa memakan ratusan token sebelum JSON mulai ditulis
 RECIPE_MAX_TOKENS = 3000
