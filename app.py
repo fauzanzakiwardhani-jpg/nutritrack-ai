@@ -3,6 +3,7 @@ import io
 import os
 import secrets
 import sqlite3
+import traceback
 from datetime import datetime
 
 import altair as alt
@@ -55,7 +56,16 @@ GOAL_OPTIONS = ['Turunkan Berat Badan', 'Jaga Berat Badan', 'Naikkan Berat Badan
 
 
 def show_ai_error(e: Exception):
-    """Tampilkan pesan error AI yang informatif lewat st.error()."""
+    """Tampilkan pesan error AI yang informatif lewat st.error().
+
+    Traceback LENGKAP selalu dicetak ke terminal (console tempat `streamlit run`
+    dijalankan) supaya penyebab asli tetap bisa dilacak walau pesan di UI diringkas.
+    """
+    print("=" * 60)
+    print(f"[AI ERROR] {type(e).__name__}: {e}")
+    traceback.print_exc()
+    print("=" * 60)
+
     if isinstance(e, AITimeoutError):
         st.error(f"⏱️ {e} Periksa koneksi internet lalu coba lagi.")
     elif isinstance(e, AINotConfiguredError):
@@ -510,6 +520,13 @@ CUSTOM_CSS = """
     }
     .st-key-va_input_box input {
         border-radius: 999px !important;
+    }
+
+    /* ---------- PASTIKAN TOAST NOTIFIKASI TIDAK TERTUTUP TOMBOL CHAT MENGAMBANG ---------- */
+    div[data-testid="stToast"],
+    div[data-testid="stToast"] * ,
+    [data-testid="stToastContainer"] {
+        z-index: 2147483647 !important;
     }
 </style>
 """
@@ -1217,6 +1234,12 @@ if "Log & Rekomendasi" in menu_selection:
 # PAGE 2: INPUT MAKANAN
 # ====================================================
 elif "Input Makanan" in menu_selection:
+    # Notifikasi hasil input SEBELUMNYA (jika ada) — ditaruh paling atas halaman
+    # supaya selalu terlihat, tidak mungkin tertutup elemen lain / kescroll ke bawah.
+    _flash = st.session_state.pop("food_flash", None)
+    if _flash:
+        st.success(_flash)
+
     st.markdown('<div class="section-label">Logging</div>', unsafe_allow_html=True)
     st.markdown("### Catat Makanan Kamu")
     input_type = st.radio(
@@ -1279,12 +1302,13 @@ elif "Input Makanan" in menu_selection:
                                     ))
                                     conn.commit()
 
-                            st.success(
-                                f"Berhasil mencatat: **{parsed_data.food_name}** ({parsed_data.calories:.0f} kcal, "
-                                f"~{parsed_data.estimated_weight_g:.0f}g, rentang {parsed_data.estimated_weight_min_g:.0f}-"
+                            st.session_state["food_flash"] = (
+                                f"🍽️ **{parsed_data.food_name}** berhasil ditambahkan — {parsed_data.calories:.0f} kcal "
+                                f"(~{parsed_data.estimated_weight_g:.0f}g, rentang {parsed_data.estimated_weight_min_g:.0f}-"
                                 f"{parsed_data.estimated_weight_max_g:.0f}g, keyakinan {parsed_data.confidence_score}%)"
                             )
                             st.toast(f"🍽️ {parsed_data.food_name} · {parsed_data.calories:.0f} kcal ditambahkan!", icon="✅")
+                            st.rerun()
                         except Exception as e:
                             show_ai_error(e)
 
@@ -1328,11 +1352,12 @@ elif "Input Makanan" in menu_selection:
                                   w_min, w_max, conf))
                             conn.commit()
 
-                    st.success(
-                        f"Berhasil mencatat: **{data.food_name}** — {data.calories:.0f} kcal · "
-                        f"P {data.protein_g:.0f}g · K {data.carbs_g:.0f}g · L {data.fat_g:.0f}g"
+                    st.session_state["food_flash"] = (
+                        f"🍽️ **{data.food_name}** berhasil ditambahkan — {data.calories:.0f} kcal "
+                        f"(P {data.protein_g:.0f}g · K {data.carbs_g:.0f}g · L {data.fat_g:.0f}g)"
                     )
                     st.toast(f"🍽️ {data.food_name} · {data.calories:.0f} kcal ditambahkan!", icon="✅")
+                    st.rerun()
                 except Exception as e:
                     show_ai_error(e)
 
@@ -1357,15 +1382,25 @@ elif "Input Makanan" in menu_selection:
                 if not food_name.strip():
                     st.warning("Nama makanan tidak boleh kosong.")
                 else:
-                    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    with sqlite3.connect(DB_NAME) as conn:
-                        cursor = conn.cursor()
-                        cursor.execute('''
-                            INSERT INTO daily_logs (user_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, input_method, logged_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?)
-                        ''', (active_user_id, food_name.strip(), weight_g, cals, protein, carbs, fat, feedback, current_time))
-                        conn.commit()
-                    st.toast(f"🍽️ {food_name.strip()} · {cals:.0f} kcal ditambahkan!", icon="✅")
+                    try:
+                        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        with sqlite3.connect(DB_NAME) as conn:
+                            cursor = conn.cursor()
+                            cursor.execute('''
+                                INSERT INTO daily_logs (user_id, food_name, weight_g, calories, protein_g, carbs_g, fat_g, ai_feedback, input_method, logged_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?)
+                            ''', (active_user_id, food_name.strip(), weight_g, cals, protein, carbs, fat, feedback, current_time))
+                            conn.commit()
+
+                        st.session_state["food_flash"] = f"🍽️ **{food_name.strip()}** berhasil ditambahkan — {cals:.0f} kcal"
+                        st.toast(f"🍽️ {food_name.strip()} · {cals:.0f} kcal ditambahkan!", icon="✅")
+                        st.rerun()
+                    except Exception as e:
+                        print("=" * 60)
+                        print(f"[MANUAL INSERT ERROR] {type(e).__name__}: {e}")
+                        traceback.print_exc()
+                        print("=" * 60)
+                        st.error(f"Gagal menyimpan ke database: {e}")
 
 
 # ====================================================
