@@ -1,8 +1,10 @@
 streamlit
+streamlit-float
 google-genai
 pandas
-altair
 pillow
 python-dotenv
 pydantic
-streamlit-float
+altair
+openpyxl
+fpdf2
