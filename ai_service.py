@@ -27,10 +27,10 @@ RECIPE_TIMEOUT_S = 25    # rekomendasi resep (3 resep, output lebih panjang)
 CHAT_TIMEOUT_S = 20      # asisten Nutri
 IMAGE_TIMEOUT_S = 40     # analisis foto (upload gambar lebih lama)
 
-TEXT_MAX_TOKENS = 800    # longgar: pada model "thinking", token berpikir ikut terhitung
-RECIPE_MAX_TOKENS = 1500
-CHAT_MAX_TOKENS = 700
-IMAGE_MAX_TOKENS = 1500
+TEXT_MAX_TOKENS = 2000   # naik dari 800 — thinking tokens bisa memakan ratusan token sebelum JSON mulai ditulis
+RECIPE_MAX_TOKENS = 3000
+CHAT_MAX_TOKENS = 1500
+IMAGE_MAX_TOKENS = 3000
 
 
 class AITimeoutError(Exception):
@@ -157,15 +157,30 @@ def _run_with_timeout(fn, timeout_s: int):
         executor.shutdown(wait=False)
 
 
-def _create(client, *, max_tokens: int, temperature: float = 0.2, **kwargs):
-    """Panggil client.interactions.create dengan generation_config; fallback jika SDK menolaknya."""
+def _create(client, *, max_tokens: int, temperature: float = 0.2, thinking_level: str = "low", **kwargs):
+    """Panggil client.interactions.create dengan generation_config; fallback bertahap jika SDK/parameter ditolak.
+
+    thinking_level="low" penting untuk output JSON singkat: tanpa ini, model bisa
+    menghabiskan sebagian besar (atau semua) token budget untuk bernalar sebelum
+    sempat menulis JSON, sehingga responsnya terpotong (lihat ValidationError
+    'EOF while parsing a value').
+    """
+    base_config = {"max_output_tokens": max_tokens, "temperature": temperature}
     try:
         return client.interactions.create(
-            generation_config={"max_output_tokens": max_tokens, "temperature": temperature},
+            generation_config={**base_config, "thinking_level": thinking_level},
             **kwargs,
         )
     except TypeError:
-        # Versi SDK lama tidak mengenal generation_config -> ulangi tanpa parameter itu
+        pass  # SDK versi ini tidak mengenal salah satu parameter -> coba tanpa thinking_level
+    except Exception as e:
+        # Beberapa versi API menolak thinking_level dengan error API (bukan TypeError)
+        if "thinking_level" not in str(e).lower():
+            raise
+    try:
+        return client.interactions.create(generation_config=base_config, **kwargs)
+    except TypeError:
+        # Versi SDK sangat lama: tidak kenal generation_config sama sekali
         return client.interactions.create(**kwargs)
 
 
