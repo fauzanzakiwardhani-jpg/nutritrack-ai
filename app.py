@@ -22,6 +22,12 @@ except ImportError:
     FPDF_AVAILABLE = False
 
 try:
+    import openpyxl  # noqa: F401 — dipakai secara internal oleh pandas ExcelWriter(engine='openpyxl')
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
+
+try:
     from streamlit_float import float_init
     FLOAT_AVAILABLE = True
 except ImportError:
@@ -1156,7 +1162,7 @@ if "Log & Rekomendasi" in menu_selection:
                 st.error("API Key belum terkonfigurasi!")
             else:
                 try:
-                    with st.spinner("Menyusun ide menu berdasarkan sisa kuota kalori & makro Anda..."):
+                    with st.spinner("Menyusun ide menu berdasarkan sisa kuota kalori & makro Anda... (bisa sampai ~30 detik)"):
                         st.session_state["recipe_suggestions"] = ai_service.suggest_recipes(
                             sisa, sisa_protein, sisa_carbs, sisa_fat, default_goal
                         )
@@ -1268,7 +1274,7 @@ elif "Input Makanan" in menu_selection:
                         st.error("API Key belum terkonfigurasi!")
                     else:
                         try:
-                            with st.spinner("Menganalisis komponen makanan, kalibrasi ukuran & kandungan nutrisi..."):
+                            with st.spinner("Menganalisis komponen makanan, kalibrasi ukuran & kandungan nutrisi... (bisa sampai ~45 detik)"):
                                 parsed_data = ai_service.analyze_food_image(
                                     uploaded_file.getvalue(),
                                     uploaded_file.type or "image/jpeg",
@@ -1333,7 +1339,7 @@ elif "Input Makanan" in menu_selection:
                 st.warning("Tolong isi deskripsi makanan terlebih dahulu.")
             else:
                 try:
-                    with st.spinner("Menganalisis nutrisi makananmu..."):
+                    with st.spinner("Menganalisis nutrisi makananmu... (bisa sampai ~30 detik)"):
                         data = ai_service.analyze_food_text(text_input.strip(), default_goal)
 
                         # Rentang berat & confidence dihitung lokal (estimasi teks = kurang pasti)
@@ -1758,16 +1764,19 @@ elif "Export Data" in menu_selection:
             )
 
         with dl2:
-            excel_buffer = io.BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                export_df.to_excel(writer, index=False, sheet_name='Log Makanan')
-            st.download_button(
-                "⬇️ Download Excel",
-                data=excel_buffer.getvalue(),
-                file_name=f"nutritrack_log_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+            if OPENPYXL_AVAILABLE:
+                excel_buffer = io.BytesIO()
+                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                    export_df.to_excel(writer, index=False, sheet_name='Log Makanan')
+                st.download_button(
+                    "⬇️ Download Excel",
+                    data=excel_buffer.getvalue(),
+                    file_name=f"nutritrack_log_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            else:
+                st.warning("Library `openpyxl` belum terpasang. Tambahkan `openpyxl` ke requirements.txt untuk mengaktifkan export Excel.")
 
         with dl3:
             if FPDF_AVAILABLE:
